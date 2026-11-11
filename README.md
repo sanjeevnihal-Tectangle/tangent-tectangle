@@ -1,36 +1,54 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Tangent — AI Marketing OS
 
-## Getting Started
+**Think. Create. Execute. Grow.** Your entire marketing department. Powered by AI.
 
-First, run the development server:
+Tangent understands a business, plans its marketing, creates on-brand content and runs campaigns — with every
+external action (publishing, ad launches, spend) gated behind explicit human approval.
+
+## Quick start
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm install
+cp .env.example .env.local   # optional — see below
+pnpm dev                     # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+With no environment variables, Tangent runs a **demo workspace** ("Saffron & Sage", a Bengaluru restaurant group).
+All demo data is labelled; edits persist to `.tangent-demo/store.json` on your machine.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| To enable | Set |
+| --- | --- |
+| AI agents (Command Centre, intelligence generation) | `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY` (automatic failover; check with `pnpm ai:check`) |
+| Accounts, multi-tenant data, RLS (live mode) | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` + run the migrations |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Connecting Supabase
 
-## Learn More
+1. Create a project at [supabase.com](https://supabase.com).
+2. Install the [Supabase CLI](https://supabase.com/docs/guides/cli), then `supabase link --project-ref <ref>` and `supabase db push` to apply `supabase/migrations/`.
+3. In Supabase Auth, enable Email and Google providers and add `http://localhost:3000/auth/callback` as a redirect URL.
+4. Set the Supabase variables in `.env.local` and restart. `/` now leads to sign-in and workspace creation.
 
-To learn more about Next.js, take a look at the following resources:
+## Scripts
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| Command | What it does |
+| --- | --- |
+| `pnpm dev` | Development server (Turbopack) |
+| `pnpm build` / `pnpm start` | Production build / server |
+| `pnpm typecheck` | Route type generation + `tsc --noEmit` |
+| `pnpm lint` | ESLint (Next.js + TypeScript rules) |
+| `pnpm test` | Vitest unit tests |
+| `pnpm check` | All of the above checks |
+| `pnpm ai:check` | Live call through the AI provider chain; shows which provider answered |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Documentation
 
-## Deploy on Vercel
+- [Product overview](docs/PRODUCT_OVERVIEW.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Database schema](docs/DATABASE_SCHEMA.md)
+- [AI agent architecture](docs/AI_AGENT_ARCHITECTURE.md)
+- [Integrations](docs/INTEGRATIONS.md)
+- [Development roadmap](docs/DEVELOPMENT_ROADMAP.md)
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Brand assets
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The logo in `public/brand/` is a **placeholder**. See [`public/brand/README.md`](public/brand/README.md) to install the official asset.
