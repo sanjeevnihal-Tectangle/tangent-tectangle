@@ -29,6 +29,9 @@ export const executionPlanSchema = z.object({
     .describe(
       "Every specific thing the user asked for, kept in their words: product/service, offer or price, audience, key message, exact wording or CTA, links, tone, format/size, platforms, deadline, must-include and must-avoid. Short lines; omit what wasn't said; never invent."
     ),
+  productNames: z
+    .array(z.string())
+    .describe("Exact names from the products and services catalogue that this request is about; empty when none is meant"),
   taskType: z.enum(TASK_TYPES),
   steps: z
     .array(

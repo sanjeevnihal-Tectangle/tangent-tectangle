@@ -19,6 +19,7 @@ import {
 } from "@/lib/integrations/connections"
 import { createAgentDesign, designComposeContext } from "@/lib/creative/agent-design"
 import { getFormat } from "@/lib/creative/formats"
+import { matchProduct, type Product } from "@/lib/domain/product"
 import { prepareExternalActions } from "@/lib/publishing/prepare"
 
 export interface OrchestratorInput {
@@ -61,6 +62,8 @@ Tools Tangent runs for the agents (do not plan steps for these; they run automat
   When the user approves it in the app, Tangent publishes it with the connected account and shows the post link.
 
 Planning rules:
+- productNames: when the request is about a product or service in the catalogue (by name, nickname or clear description),
+  list its exact catalogue name. Tangent then uses that product's details and its own brand kit for every agent and design.
 - Fill requestBrief with everything specific the user asked for (their words, product, offer, audience, CTA, link, tone,
   format, platforms, must-include/avoid). Every agent receives it, so put the user's exact requirements there.
 - Write each step instruction so the agent delivers exactly what was asked (e.g. "Write one Instagram caption announcing
@@ -222,7 +225,7 @@ export async function* runOrchestrator(
     yield { type: "stage", stage: "understanding", status: "done" }
 
     yield { type: "stage", stage: "context", status: "active" }
-    const context = await loadBusinessContext(repository)
+    let context = await loadBusinessContext(repository)
     let connections: PlatformConnection[] = []
     try {
       connections = summarizeConnections(await repository.listConnectedAccounts())
@@ -230,7 +233,7 @@ export async function* runOrchestrator(
       console.error("[tangent] could not load connected accounts", error)
     }
     const connectionText = connectionsContextText(connections)
-    const agentContext = `${context.text}\n\n## Connected platforms\n${connectionText}`
+    let agentContext = `${context.text}\n\n## Connected platforms\n${connectionText}`
     run.contextSources = [...context.sources, { label: "Connected platforms", detail: connectionSourceDetail(connections) }]
     yield { type: "context", sources: run.contextSources }
     yield { type: "stage", stage: "context", status: "done" }
@@ -261,6 +264,17 @@ export async function* runOrchestrator(
       (a) => a.actionType === "publish_post" && canonicalProvider(a.platform) === "instagram"
     )
     const plan = needsImage ? { ...planResult.data, produceImage: true } : planResult.data
+    // The product the request is about: its details and its brand kit drive every agent and the design.
+    const focus = plan.productNames.map((name) => matchProduct(context.products, name)).find((p): p is Product => p !== null) ?? null
+    if (focus) {
+      context = await loadBusinessContext(repository, undefined, focus.id)
+      agentContext = `${context.text}\n\n## Connected platforms\n${connectionText}`
+      run.contextSources = [
+        ...context.sources,
+        { label: "Connected platforms", detail: connectionSourceDetail(connections) },
+      ]
+      yield { type: "context", sources: run.contextSources }
+    }
     const normalized = normalizePlan(plan, input.maxSteps)
     const agentSteps = [...normalized.steps]
     if (plan.produceImage && !agentSteps.some((s) => s.agentId === "graphic_designer")) {
@@ -392,7 +406,7 @@ export async function* runOrchestrator(
         )?.data.concepts[0]
         const variant = produced.flatMap((p) => (p.output.kind === "copy" ? (p.output.data as CopyOutput).variants : []))[0]
         try {
-          const { ctx, brandProfileId } = await designComposeContext(repository, input.workspaceName, format, image.assetId)
+          const { ctx, brandProfileId } = await designComposeContext(repository, input.workspaceName, format, image.assetId, context.brand?.id)
           const designed = await createAgentDesign({
             provider,
             repository,

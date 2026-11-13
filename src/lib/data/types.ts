@@ -4,6 +4,7 @@ import type { AdAccountView } from "@/lib/domain/ads"
 import type { AnalyticsEventRecord } from "@/lib/domain/analytics"
 import type { ApprovalDecision, ApprovalView } from "@/lib/domain/approvals"
 import type { BrandProfile } from "@/lib/domain/brand"
+import type { Product } from "@/lib/domain/product"
 import type { BusinessProfile, MarketingIntelligence } from "@/lib/domain/business"
 import type { Campaign } from "@/lib/domain/campaigns"
 import type { ContentItem } from "@/lib/domain/content"
@@ -118,6 +119,11 @@ export interface WorkspaceRepository {
   listBrandProfiles(): Promise<BrandProfile[]>
   saveBrandProfile(profile: BrandProfile): Promise<BrandProfile>
   deleteBrandProfile(id: string): Promise<void>
+
+  /** Product & service catalogue (each item can use its own brand kit). */
+  listProducts(): Promise<Product[]>
+  saveProduct(product: Product): Promise<Product>
+  deleteProduct(id: string): Promise<void>
 
   listConversations(): Promise<ConversationSummary[]>
   getConversation(id: string): Promise<Conversation | null>

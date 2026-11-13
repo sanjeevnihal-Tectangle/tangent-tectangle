@@ -16,7 +16,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { AssetPicker } from "@/features/assets/asset-picker"
 import { deleteBrandProfile, saveBrandProfile } from "@/features/brand/actions"
-import { BRAND_COLOR_ROLES, emptyBrandProfile, type BrandProfile } from "@/lib/domain/brand"
+import { DESIGN_FONT_LABELS, DESIGN_FONTS, type DesignFont } from "@/lib/creative/document"
+import {
+  BRAND_COLOR_ROLES,
+  CORNER_STYLES,
+  emptyBrandProfile,
+  ICON_STYLES,
+  IMAGE_STYLE_LABELS,
+  IMAGE_STYLES,
+  PATTERN_KINDS,
+  type BrandProfile,
+  type BrandVisualStyle,
+} from "@/lib/domain/brand"
 import { cn } from "@/lib/utils"
 
 function Section({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
@@ -77,6 +88,7 @@ function BrandEditor({
   disabled: boolean
 }) {
   const set = <K extends keyof BrandProfile>(key: K, value: BrandProfile[K]) => onChange({ ...brand, [key]: value })
+  const setStyle = (patch: Partial<BrandVisualStyle>) => onChange({ ...brand, visualStyle: { ...brand.visualStyle, ...patch } })
   const [logoPickerOpen, setLogoPickerOpen] = useState(false)
 
   return (
@@ -218,6 +230,133 @@ function BrandEditor({
         <div className="space-y-1.5">
           <Label htmlFor="prohibited">Prohibited messaging</Label>
           <TagInput id="prohibited" value={brand.prohibitedMessaging} onChange={(prohibitedMessaging) => set("prohibitedMessaging", prohibitedMessaging)} placeholder="e.g. guaranteed" maxItems={30} />
+        </div>
+      </Section>
+
+      <Section
+        title="Visual style"
+        description="How creatives look: the Graphic Designer and Creative Studio follow this for imagery, illustrations, icons, patterns and fonts."
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label>Imagery</Label>
+            <Select value={brand.visualStyle.imageStyle} onValueChange={(v) => setStyle({ imageStyle: v as BrandVisualStyle["imageStyle"] })}>
+              <SelectTrigger aria-label="Imagery" className="w-full">
+                <SelectValue>{IMAGE_STYLE_LABELS[brand.visualStyle.imageStyle]}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {IMAGE_STYLES.map((v) => (
+                  <SelectItem key={v} value={v}>
+                    {IMAGE_STYLE_LABELS[v]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Icon style</Label>
+            <Select value={brand.visualStyle.iconStyle} onValueChange={(v) => setStyle({ iconStyle: v as BrandVisualStyle["iconStyle"] })}>
+              <SelectTrigger aria-label="Icon style" className="w-full capitalize">
+                <SelectValue>{brand.visualStyle.iconStyle}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {ICON_STYLES.map((v) => (
+                  <SelectItem key={v} value={v} className="capitalize">
+                    {v}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Heading font (designs)</Label>
+            <Select value={brand.visualStyle.headingFont} onValueChange={(v) => setStyle({ headingFont: v as DesignFont })}>
+              <SelectTrigger aria-label="Heading font" className="w-full">
+                <SelectValue>{DESIGN_FONT_LABELS[brand.visualStyle.headingFont]}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {DESIGN_FONTS.map((f) => (
+                  <SelectItem key={f} value={f}>
+                    {DESIGN_FONT_LABELS[f]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Body font (designs)</Label>
+            <Select value={brand.visualStyle.bodyFont} onValueChange={(v) => setStyle({ bodyFont: v as DesignFont })}>
+              <SelectTrigger aria-label="Body font" className="w-full">
+                <SelectValue>{DESIGN_FONT_LABELS[brand.visualStyle.bodyFont]}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {DESIGN_FONTS.map((f) => (
+                  <SelectItem key={f} value={f}>
+                    {DESIGN_FONT_LABELS[f]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Corners</Label>
+            <Select value={brand.visualStyle.cornerStyle} onValueChange={(v) => setStyle({ cornerStyle: v as BrandVisualStyle["cornerStyle"] })}>
+              <SelectTrigger aria-label="Corners" className="w-full capitalize">
+                <SelectValue>{brand.visualStyle.cornerStyle}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {CORNER_STYLES.map((v) => (
+                  <SelectItem key={v} value={v} className="capitalize">
+                    {v}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Background patterns</Label>
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Background patterns">
+            {PATTERN_KINDS.map((kind) => {
+              const on = brand.visualStyle.patterns.includes(kind)
+              return (
+                <Button
+                  key={kind}
+                  type="button"
+                  size="sm"
+                  variant={on ? "brand" : "outline"}
+                  aria-pressed={on}
+                  className="capitalize"
+                  disabled={!on && brand.visualStyle.patterns.length >= 4}
+                  onClick={() =>
+                    setStyle({ patterns: on ? brand.visualStyle.patterns.filter((p) => p !== kind) : [...brand.visualStyle.patterns, kind] })
+                  }
+                >
+                  {kind}
+                </Button>
+              )
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">Pick up to 4. Designs use them as subtle backgrounds in your brand colours.</p>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="illustration-style">Illustration style</Label>
+          <Input
+            id="illustration-style"
+            value={brand.visualStyle.illustrationStyle}
+            onChange={(e) => setStyle({ illustrationStyle: e.target.value })}
+            placeholder="e.g. flat vector, rounded shapes, soft shadows, people with simple faces"
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="graphic-elements">Graphic elements</Label>
+          <Textarea
+            id="graphic-elements"
+            rows={2}
+            value={brand.visualStyle.graphicElements}
+            onChange={(e) => setStyle({ graphicElements: e.target.value })}
+            placeholder="e.g. soft blobs in the corners, thin line accents, rounded cards for features, highlight the price in a badge"
+          />
         </div>
       </Section>
 

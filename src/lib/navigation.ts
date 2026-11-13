@@ -5,6 +5,7 @@ import {
   ChartLine,
   Compass,
   Fingerprint,
+  Package,
   Images,
   LayoutDashboard,
   Megaphone,
@@ -43,6 +44,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { id: "overview", label: "Overview", segment: "overview", icon: LayoutDashboard, description: "Cross-channel marketing performance at a glance", status: "available", phase: 1 },
       { id: "command-centre", label: "AI Command Centre", segment: "command-centre", icon: Sparkles, description: "Brief your AI marketing team and track their work", status: "available", phase: 2 },
       { id: "strategy", label: "Marketing Strategy", segment: "strategy", icon: Compass, description: "Business intelligence profile, personas and strategy", status: "available", phase: 1 },
+      { id: "products", label: "Products & Services", segment: "products", icon: Package, description: "What you sell, with a brand kit per product", status: "available", phase: 1 },
     ],
   },
   {

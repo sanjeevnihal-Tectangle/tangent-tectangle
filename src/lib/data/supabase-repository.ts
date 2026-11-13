@@ -9,6 +9,7 @@ import type { AdAccountView } from "@/lib/domain/ads"
 import type { AnalyticsEventRecord } from "@/lib/domain/analytics"
 import { decisionToStatus, type ApprovalView } from "@/lib/domain/approvals"
 import { brandProfileSchema, type BrandProfile } from "@/lib/domain/brand"
+import { productSchema, type Product } from "@/lib/domain/product"
 import {
   businessProfileSchema,
   marketingIntelligenceContentSchema,
@@ -57,7 +58,51 @@ interface BrandRow {
   prohibited_messaging: string[]
   visual_references: string[]
   guidelines: string
+  visual_style?: unknown
   updated_at: string
+}
+
+interface ProductRow {
+  id: string
+  name: string
+  kind: string
+  category: string
+  description: string
+  price: string
+  audience: string
+  benefits: string[]
+  features: string[]
+  url: string
+  brand_profile_id: string | null
+  image_asset_ids: string[]
+  is_active: boolean
+  updated_at: string
+}
+
+function productFromRow(row: ProductRow): Product | null {
+  const parsed = productSchema.safeParse({
+    id: row.id,
+    name: row.name,
+    kind: row.kind,
+    category: row.category,
+    description: row.description,
+    price: row.price,
+    audience: row.audience,
+    benefits: row.benefits ?? [],
+    features: row.features ?? [],
+    url: row.url,
+    brandProfileId: row.brand_profile_id,
+    imageAssetIds: row.image_asset_ids ?? [],
+    isActive: row.is_active,
+    updatedAt: row.updated_at,
+  })
+  return parsed.success ? parsed.data : null
+}
+
+/** True when a table or column from a migration that hasn't been run yet is missing. */
+function isMissingSchema(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false
+  return ["42P01", "42703", "PGRST204", "PGRST205"].includes(error.code ?? "") || /does not exist|could not find/i.test(error.message ?? "")
 }
 
 function brandFromRow(row: BrandRow): BrandProfile {
@@ -75,6 +120,7 @@ function brandFromRow(row: BrandRow): BrandProfile {
     prohibitedMessaging: row.prohibited_messaging,
     visualReferences: row.visual_references,
     guidelines: row.guidelines,
+    visualStyle: row.visual_style ?? {},
     updatedAt: row.updated_at,
   })
 }
@@ -452,29 +498,31 @@ export function createSupabaseRepository(
             .neq("id", profile.id)
         )
       }
-      const row = check(
-        "Save brand profile",
-        await supabase
-          .from("brand_profiles")
-          .upsert({
-            id: profile.id,
-            organization_id: organizationId,
-            name: profile.name,
-            is_default: profile.isDefault,
-            logo_asset_id: profile.logoAssetId,
-            colors: profile.colors,
-            typography: profile.typography,
-            voice: profile.voice,
-            messaging: profile.messaging,
-            approved_copy: profile.approvedCopy,
-            prohibited_messaging: profile.prohibitedMessaging,
-            visual_references: profile.visualReferences,
-            guidelines: profile.guidelines,
-            created_by: userId,
-          })
-          .select("*")
-          .single()
-      ) as BrandRow
+      const values = {
+        id: profile.id,
+        organization_id: organizationId,
+        name: profile.name,
+        is_default: profile.isDefault,
+        logo_asset_id: profile.logoAssetId,
+        colors: profile.colors,
+        typography: profile.typography,
+        voice: profile.voice,
+        messaging: profile.messaging,
+        approved_copy: profile.approvedCopy,
+        prohibited_messaging: profile.prohibitedMessaging,
+        visual_references: profile.visualReferences,
+        guidelines: profile.guidelines,
+        visual_style: profile.visualStyle,
+        created_by: userId,
+      }
+      let result = await supabase.from("brand_profiles").upsert(values).select("*").single()
+      if (isMissingSchema(result.error)) {
+        // visual_style arrives with migration 20261113000300; save the rest until it has been run.
+        console.warn("[tangent] brand_profiles.visual_style missing; run the latest Supabase migration")
+        const { visual_style: _style, ...rest } = values
+        result = await supabase.from("brand_profiles").upsert(rest).select("*").single()
+      }
+      const row = check("Save brand profile", result) as BrandRow
       const [saved] = await withLogoUrls([brandFromRow(row)])
       return saved!
     },
@@ -485,6 +533,60 @@ export function createSupabaseRepository(
         await supabase
           .from("brand_profiles")
           .update({ deleted_at: new Date().toISOString(), is_default: false })
+          .eq("organization_id", organizationId)
+          .eq("id", id)
+      )
+    },
+
+    async listProducts() {
+      const { data, error } = await supabase
+        .from("products")
+        .select("id, name, kind, category, description, price, audience, benefits, features, url, brand_profile_id, image_asset_ids, is_active, updated_at")
+        .eq("organization_id", organizationId)
+        .is("deleted_at", null)
+        .order("name")
+      if (isMissingSchema(error)) return []
+      if (error) throw new RepositoryError("List products", error)
+      return ((data ?? []) as ProductRow[]).map(productFromRow).filter((p): p is Product => p !== null)
+    },
+
+    async saveProduct(product) {
+      const { data, error } = await supabase
+        .from("products")
+        .upsert({
+          id: product.id,
+          organization_id: organizationId,
+          name: product.name,
+          kind: product.kind,
+          category: product.category,
+          description: product.description,
+          price: product.price,
+          audience: product.audience,
+          benefits: product.benefits,
+          features: product.features,
+          url: product.url,
+          brand_profile_id: product.brandProfileId,
+          image_asset_ids: product.imageAssetIds,
+          is_active: product.isActive,
+          created_by: userId,
+        })
+        .select("id, name, kind, category, description, price, audience, benefits, features, url, brand_profile_id, image_asset_ids, is_active, updated_at")
+        .single()
+      if (isMissingSchema(error)) {
+        throw new RepositoryError("Save product", { message: "the products table doesn't exist yet. Run the latest Supabase migration (products_brand_style)" })
+      }
+      if (error) throw new RepositoryError("Save product", error)
+      const saved = productFromRow(data as ProductRow)
+      if (!saved) throw new RepositoryError("Save product", { message: "the saved product could not be read back" })
+      return saved
+    },
+
+    async deleteProduct(id) {
+      check(
+        "Delete product",
+        await supabase
+          .from("products")
+          .update({ deleted_at: new Date().toISOString() })
           .eq("organization_id", organizationId)
           .eq("id", id)
       )

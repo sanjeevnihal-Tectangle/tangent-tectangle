@@ -6,6 +6,7 @@ import path from "node:path"
 import { ApprovalError, canTransition, hashPayload, transition, type ApprovalRequest } from "@/lib/approvals/engine"
 import type { AgentRunLog, AuditEntry, AuditRecord, WorkspaceRepository } from "@/lib/data/types"
 import { decisionToStatus, type ApprovalView } from "@/lib/domain/approvals"
+import type { Product } from "@/lib/domain/product"
 import type { BrandProfile } from "@/lib/domain/brand"
 import type { BusinessProfile, MarketingIntelligence } from "@/lib/domain/business"
 import type { Campaign } from "@/lib/domain/campaigns"
@@ -46,6 +47,7 @@ interface DemoStoreData {
   audit: AuditRecord[]
   runs?: AgentRunLog[]
   creativeProjects?: CreativeProject[]
+  products?: Product[]
   contentItems?: ContentItem[]
   usage: { key: string; quantity: number; at: string }[]
 }
@@ -163,6 +165,26 @@ export function createDemoRepository(): WorkspaceRepository {
         if (!data.brandProfiles.some((p) => p.isDefault) && data.brandProfiles[0]) {
           data.brandProfiles[0].isDefault = true
         }
+      })
+    },
+
+    async listProducts() {
+      return [...((await load()).products ?? [])].sort((a, b) => a.name.localeCompare(b.name))
+    },
+    async saveProduct(product) {
+      return mutate((data) => {
+        const saved = { ...product, updatedAt: new Date().toISOString() }
+        const list = data.products ?? []
+        const index = list.findIndex((p) => p.id === saved.id)
+        if (index >= 0) list[index] = saved
+        else list.push(saved)
+        data.products = list
+        return saved
+      })
+    },
+    async deleteProduct(id) {
+      await mutate((data) => {
+        data.products = (data.products ?? []).filter((p) => p.id !== id)
       })
     },
 

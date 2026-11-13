@@ -27,9 +27,10 @@ You are the Graphic Designer composing a finished marketing design. A layout eng
 - slides: for carousel formats, 3–6 slides (headline + 1–2 sentence body) after the cover; otherwise an empty list.`
 
 /** Default brand profile and business name used to compose designs. */
-export async function loadDesignBrand(repository: WorkspaceRepository, fallbackName: string) {
+export async function loadDesignBrand(repository: WorkspaceRepository, fallbackName: string, brandProfileId?: string | null) {
   const [brands, profile] = await Promise.all([repository.listBrandProfiles(), repository.getBusinessProfile()])
-  const brand: BrandProfile | null = brands.find((b) => b.isDefault) ?? brands[0] ?? null
+  const brand: BrandProfile | null =
+    (brandProfileId ? brands.find((b) => b.id === brandProfileId) : undefined) ?? brands.find((b) => b.isDefault) ?? brands[0] ?? null
   return { brand, brands, businessName: profile?.name ?? fallbackName }
 }
 
@@ -37,9 +38,10 @@ export async function designComposeContext(
   repository: WorkspaceRepository,
   fallbackName: string,
   format: CreativeFormat,
-  imageAssetId: string | null
+  imageAssetId: string | null,
+  brandProfileId?: string | null
 ): Promise<{ ctx: ComposeContext; brandProfileId: string | null }> {
-  const { brand, businessName } = await loadDesignBrand(repository, fallbackName)
+  const { brand, businessName } = await loadDesignBrand(repository, fallbackName, brandProfileId)
   return {
     ctx: { format, brandColors: brand?.colors ?? [], businessName, logoAssetId: brand?.logoAssetId ?? null, imageAssetId },
     brandProfileId: brand?.id ?? null,

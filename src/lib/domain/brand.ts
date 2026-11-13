@@ -1,5 +1,7 @@
 import { z } from "zod"
 
+import { DESIGN_FONTS } from "@/lib/creative/document"
+
 const hexColor = z
   .string()
   .trim()
@@ -9,6 +11,33 @@ const lines = (maxItems: number, maxLength = 280) =>
   z.array(z.string().trim().min(1).max(maxLength)).max(maxItems)
 
 export const BRAND_COLOR_ROLES = ["primary", "secondary", "accent", "neutral", "background"] as const
+
+export const IMAGE_STYLES = ["photo", "illustration", "3d", "graphic", "mixed"] as const
+export const IMAGE_STYLE_LABELS: Record<(typeof IMAGE_STYLES)[number], string> = {
+  photo: "Photography",
+  illustration: "Illustrations",
+  "3d": "3D renders",
+  graphic: "Graphic shapes & icons (no photos)",
+  mixed: "Mix, chosen per creative",
+}
+export const ICON_STYLES = ["outline", "filled", "duotone"] as const
+export const PATTERN_KINDS = ["dots", "grid", "diagonal", "waves", "circles", "confetti"] as const
+export type PatternKind = (typeof PATTERN_KINDS)[number]
+export const CORNER_STYLES = ["rounded", "sharp", "pill"] as const
+
+/** How the brand looks beyond colours: imagery, illustration, icons, patterns, fonts and shapes. */
+export const brandVisualStyleSchema = z.object({
+  imageStyle: z.enum(IMAGE_STYLES).default("mixed"),
+  illustrationStyle: z.string().trim().max(300).default(""),
+  iconStyle: z.enum(ICON_STYLES).default("outline"),
+  patterns: z.array(z.enum(PATTERN_KINDS)).max(4).default([]),
+  graphicElements: z.string().trim().max(400).default(""),
+  headingFont: z.enum(DESIGN_FONTS).default("heading"),
+  bodyFont: z.enum(DESIGN_FONTS).default("body"),
+  cornerStyle: z.enum(CORNER_STYLES).default("rounded"),
+})
+export type BrandVisualStyle = z.infer<typeof brandVisualStyleSchema>
+export const DEFAULT_VISUAL_STYLE: BrandVisualStyle = brandVisualStyleSchema.parse({})
 
 export const brandProfileSchema = z.object({
   id: z.string(),
@@ -47,6 +76,7 @@ export const brandProfileSchema = z.object({
   prohibitedMessaging: lines(30, 200),
   visualReferences: lines(20, 400),
   guidelines: z.string().trim().max(4000),
+  visualStyle: brandVisualStyleSchema.prefault({}),
   updatedAt: z.string(),
 })
 
@@ -67,6 +97,7 @@ export function emptyBrandProfile(id: string, name: string): BrandProfile {
     prohibitedMessaging: [],
     visualReferences: [],
     guidelines: "",
+    visualStyle: { ...DEFAULT_VISUAL_STYLE },
     updatedAt: new Date().toISOString(),
   }
 }

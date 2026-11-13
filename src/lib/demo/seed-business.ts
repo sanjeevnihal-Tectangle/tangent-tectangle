@@ -1,4 +1,4 @@
-import type { BrandProfile } from "@/lib/domain/brand"
+import { DEFAULT_VISUAL_STYLE, type BrandProfile } from "@/lib/domain/brand"
 import type { BusinessProfile, MarketingIntelligence } from "@/lib/domain/business"
 
 export const DEMO_BUSINESS_PROFILE: BusinessProfile = {
@@ -184,6 +184,7 @@ export const DEMO_BRAND_PROFILES: BrandProfile[] = [
     ],
     guidelines:
       "Logo always on rice paper or charcoal backgrounds. Keep 20% clear space around food hero images. Price callouts use Turmeric on Charcoal.",
+    visualStyle: { ...DEFAULT_VISUAL_STYLE, imageStyle: "photo", patterns: ["dots"], headingFont: "serif" },
     updatedAt: "2026-11-01T10:00:00.000Z",
   },
   {
@@ -213,6 +214,7 @@ export const DEMO_BRAND_PROFILES: BrandProfile[] = [
     prohibitedMessaging: ["cheapest", "guaranteed"],
     visualReferences: ["Banquet setups with warm lighting", "Live counters and chefs in action"],
     guidelines: "",
+    visualStyle: { ...DEFAULT_VISUAL_STYLE },
     updatedAt: "2026-10-20T10:00:00.000Z",
   },
 ]

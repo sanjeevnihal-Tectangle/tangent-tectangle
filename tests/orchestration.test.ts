@@ -20,6 +20,7 @@ const copyOutput: AgentOutput = {
 describe("plan normalisation", () => {
   const plan: ExecutionPlan = {
     requestBrief: "",
+    productNames: [],
     intent: "Write lots of copy",
     taskType: "content_creation",
     steps: [
