@@ -825,6 +825,8 @@ export function createSupabaseRepository(
           .from("connected_accounts")
           .select("id, provider, external_account_id, display_name, scopes, status, token_expires_at, last_synced_at, last_error, updated_at")
           .eq("organization_id", organizationId)
+          // Disconnected accounts that still have publishing history are kept as "revoked".
+          .neq("status", "revoked")
           .order("updated_at", { ascending: false })
       ) as {
         id: string
@@ -990,20 +992,29 @@ export function createSupabaseRepository(
     },
 
     async disconnectConnectedAccount(id) {
-      const env = serverEnv()
       removeLocalConnectedAccount(organizationId, id)
-      if (publicEnv.NEXT_PUBLIC_SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
-        const admin = createClient(
-          publicEnv.NEXT_PUBLIC_SUPABASE_URL,
-          env.SUPABASE_SERVICE_ROLE_KEY,
-          { auth: { persistSession: false, autoRefreshToken: false } }
-        )
+      const admin = adminClient()
+      if (!admin) return
+      const { error: deleteError } = await admin
+        .from("connected_accounts")
+        .delete()
+        .eq("organization_id", organizationId)
+        .eq("id", id)
+      if (!deleteError) return
+
+      // Publishing history (publishing_jobs) keeps the row from being deleted.
+      // Retire it instead: hidden from the app, unusable, and its token removed.
+      console.warn("[tangent] connected account kept for history, marking revoked:", deleteError.message)
+      check(
+        "Disconnect account",
         await admin
           .from("connected_accounts")
-          .delete()
+          .update({ status: "revoked", last_error: "Disconnected by a workspace member." })
           .eq("organization_id", organizationId)
           .eq("id", id)
-      }
+      )
+      const { error: credError } = await admin.rpc("delete_integration_credential", { p_connected_account_id: id })
+      if (credError) console.error("[tangent] removing the stored token failed:", credError.message)
     },
 
     async getConnectedAccountCredential(id) {
