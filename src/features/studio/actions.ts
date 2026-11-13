@@ -44,13 +44,27 @@ async function requireCreator(workspace: string) {
 
 const describeTask = describeDesignTask
 
+/** The brand kit and product a design is for (from the Studio pickers). */
+export interface DesignTarget {
+  /** null/absent = automatic: the product's own kit, else the default kit. */
+  brandProfileId?: string | null
+  productId?: string | null
+}
+
+const idOrNull = (value: unknown): string | undefined => (typeof value === "string" && value.length > 0 && value.length <= 64 ? value : undefined)
+
+/** Business context for the chosen brand kit and product (the product's kit applies when no kit is chosen). */
+function targetContext(repository: WorkspaceRepository, target: DesignTarget | undefined) {
+  return loadBusinessContext(repository, idOrNull(target?.brandProfileId), idOrNull(target?.productId))
+}
+
 // ---------------------------------------------------------------------------
 // Ideas and concepts
 // ---------------------------------------------------------------------------
 
 const ideasSchema = z.object({ ideas: z.array(z.string()).describe("Exactly 3 one-sentence creative briefs") })
 
-export async function suggestIdeas(workspace: string, input: { objective: string; formatId: string }): Promise<StudioResult<string[]>> {
+export async function suggestIdeas(workspace: string, input: { objective: string; formatId: string } & DesignTarget): Promise<StudioResult<string[]>> {
   const { context, repository, denied } = await requireCreator(workspace)
   if (denied) return denied
   if (!isFormatId(input.formatId)) return { ok: false, error: "Unknown format." }
@@ -59,7 +73,7 @@ export async function suggestIdeas(workspace: string, input: { objective: string
   const quota = aiQuotaError(context)
   if (quota) return { ok: false, error: quota }
   try {
-    const business = await loadBusinessContext(repository)
+    const business = await targetContext(repository, input)
     const result = await provider.generateStructured({
       tier: "fast",
       system: `${SHARED_RULES}\n\nYou suggest specific, timely creative ideas (consider the date, Indian festivals and the business's offers).`,
@@ -77,7 +91,7 @@ export async function suggestIdeas(workspace: string, input: { objective: string
 
 export async function generateConcepts(
   workspace: string,
-  input: { objective: string; formatId: string; description: string }
+  input: { objective: string; formatId: string; description: string } & DesignTarget
 ): Promise<StudioResult<CreativeOutput["concepts"]>> {
   const { context, repository, denied } = await requireCreator(workspace)
   if (denied) return denied
@@ -87,7 +101,7 @@ export async function generateConcepts(
   const quota = aiQuotaError(context)
   if (quota) return { ok: false, error: quota }
   try {
-    const business = await loadBusinessContext(repository)
+    const business = await targetContext(repository, input)
     const format = getFormat(input.formatId)
     const result = await runAgentTask(provider, "graphic_designer", {
       userRequest: input.description,
@@ -142,6 +156,8 @@ const composeInput = z.object({
   description: z.string().max(2000),
   concept: z.object({ name: z.string(), visualDirection: z.string(), imagePrompt: z.string() }).nullable(),
   imageAssetId: z.string().nullable(),
+  brandProfileId: z.string().max(64).nullable().optional(),
+  productId: z.string().max(64).nullable().optional(),
 })
 
 export async function composeDesign(workspace: string, input: z.input<typeof composeInput>): Promise<StudioResult<{ projectId: string }>> {
@@ -157,8 +173,8 @@ export async function composeDesign(workspace: string, input: z.input<typeof com
   const { objective, formatId, description, concept, imageAssetId } = parsed.data
   const format = getFormat(formatId)
   try {
-    const business = await loadBusinessContext(repository)
-    const { ctx, brandProfileId, brandStyleText } = await composeContext(repository, context, format, imageAssetId)
+    const business = await targetContext(repository, parsed.data)
+    const { ctx, brandProfileId, brandStyleText } = await composeContext(repository, context, format, imageAssetId, business.brand?.id)
     const result = await provider.generateStructured({
       tier: "fast",
       system: DESIGN_SYSTEM,
@@ -214,13 +230,14 @@ export async function createFromTemplate(workspace: string, templateId: string):
   }
 }
 
-export async function createBlank(workspace: string, formatId: string): Promise<StudioResult<{ projectId: string }>> {
+export async function createBlank(workspace: string, formatId: string, target?: DesignTarget): Promise<StudioResult<{ projectId: string }>> {
   const { context, repository, denied } = await requireCreator(workspace)
   if (denied) return denied
   if (!isFormatId(formatId)) return { ok: false, error: "Unknown format." }
   try {
     const format = getFormat(formatId)
-    const { ctx, brandProfileId } = await composeContext(repository, context, format, null)
+    const business = target?.brandProfileId || target?.productId ? await targetContext(repository, target) : null
+    const { ctx, brandProfileId } = await composeContext(repository, context, format, null, business?.brand?.id)
     const spec: DesignSpec = {
       layout: "top_headline",
       headline: "Your headline",
@@ -311,7 +328,7 @@ export async function generateVariations(workspace: string, projectId: string): 
   try {
     const format = getFormat(project.formatId)
     const imageAssetId = project.document.pages[0]?.background.type === "image" ? project.document.pages[0].background.assetId : null
-    const business = await loadBusinessContext(repository)
+    const business = await loadBusinessContext(repository, project.brandProfileId ?? undefined)
     const current = project.brief.spec
     const result = await provider.generateStructured({
       tier: "fast",
@@ -330,7 +347,7 @@ export async function generateVariations(workspace: string, projectId: string): 
       maxOutputTokens: 5000,
     })
     await meterAi(repository, result.usage, "studio.variations")
-    const { ctx } = await composeContext(repository, context, format, imageAssetId)
+    const { ctx } = await composeContext(repository, context, format, imageAssetId, project.brandProfileId)
     return { ok: true, data: result.data.variants.slice(0, 3).map((spec) => composeDocument(spec, ctx)) }
   } catch (error) {
     return failure(error, "Could not generate variations.")

@@ -24,6 +24,8 @@ export function useCommandRun() {
       workspace: string
       conversationId: string | null
       message: string
+      brandProfileId?: string | null
+      productId?: string | null
       onConversation: (id: string) => void
     }): Promise<StartRunResult> => {
       const controller = new AbortController()
@@ -40,6 +42,8 @@ export function useCommandRun() {
             workspace: input.workspace,
             conversationId: input.conversationId,
             message: input.message,
+            brandProfileId: input.brandProfileId ?? null,
+            ...(input.productId === undefined ? {} : { productId: input.productId }),
           }),
           signal: controller.signal,
         })

@@ -5,9 +5,9 @@ import { Suspense } from "react"
 
 import { Skeleton } from "@/components/ui/skeleton"
 import { CreativeEditor } from "@/features/studio/editor/creative-editor"
-import { loadStudioBrand } from "@/features/studio/server"
 import { getImageProvider } from "@/lib/ai/image-provider"
 import { referencedAssetIds } from "@/lib/creative/document"
+import type { BrandKitStyle } from "@/lib/creative/rebrand"
 import { resolveWorkspace } from "@/lib/workspace/server"
 
 export const metadata: Metadata = { title: "Design editor" }
@@ -18,18 +18,33 @@ async function EditorLoader({ params }: Props) {
   const { orgSlug, projectId } = await params
   // The editor is fully interactive and per-request (history timestamps, generated ids).
   await connection()
-  const { context, repository } = await resolveWorkspace(orgSlug)
+  const { repository } = await resolveWorkspace(orgSlug)
   const project = await repository.getCreativeProject(projectId)
   if (!project) notFound()
-  const [assetUrls, { brand }] = await Promise.all([
-    repository.resolveAssetUrls(referencedAssetIds(project.document)),
-    loadStudioBrand(repository, context),
-  ])
+  const brands = await repository.listBrandProfiles()
+  const logoIds = brands.map((b) => b.logoAssetId).filter((id): id is string => Boolean(id))
+  // Logos of every kit are resolved up front so switching kits shows the new logo straight away.
+  const assetUrls = await repository.resolveAssetUrls([...new Set([...referencedAssetIds(project.document), ...logoIds])])
+  const brandKits: (BrandKitStyle & { isDefault: boolean })[] = [...brands]
+    .sort((a, b) => Number(b.isDefault) - Number(a.isDefault))
+    .map((b) => ({
+      id: b.id,
+      name: b.name,
+      isDefault: b.isDefault,
+      colors: b.colors.map((c) => ({ hex: c.hex, role: c.role })),
+      logoAssetId: b.logoAssetId,
+      style: {
+        headingFont: b.visualStyle.headingFont,
+        bodyFont: b.visualStyle.bodyFont,
+        iconVariant: b.visualStyle.iconStyle,
+        cornerStyle: b.visualStyle.cornerStyle,
+      },
+    }))
   return (
     <CreativeEditor
       project={project}
       initialAssetUrls={assetUrls}
-      swatches={(brand?.colors ?? []).map((c) => c.hex)}
+      brandKits={brandKits}
       imageConfigured={getImageProvider() !== null}
     />
   )

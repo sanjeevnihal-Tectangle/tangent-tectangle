@@ -58,15 +58,25 @@ export function BrandGenerator({
   open,
   onOpenChange,
   current,
+  currentSaved,
+  currentDirty,
+  savedCount,
   onGenerated,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** The profile being edited, if any (can be filled in place). */
   current: BrandProfile | null
+  /** Whether `current` is already saved (an unsaved new kit is filled in place by default). */
+  currentSaved: boolean
+  /** Whether `current` has unsaved edits that a new draft would replace. */
+  currentDirty: boolean
+  /** Saved brand kits, to warn before the plan limit is hit. */
+  savedCount: number
   onGenerated: (draft: BrandProfile) => void
 }) {
-  const { workspace } = useWorkspace()
+  const { workspace, usage } = useWorkspace()
+  const limit = usage.find((u) => u.key === "brand_profiles")?.limit ?? null
   const [prompt, setPrompt] = useState("")
   const [logo, setLogo] = useState<Picked | null>(null)
   const [references, setReferences] = useState<Picked[]>([])
@@ -74,7 +84,19 @@ export function BrandGenerator({
   const [target, setTarget] = useState<"new" | "current">("new")
   const [busy, setBusy] = useState(false)
 
+  // Each time the dialog opens: an unsaved new kit is filled in place; a saved one gets a new kit.
+  const [wasOpen, setWasOpen] = useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) setTarget(current && !currentSaved ? "current" : "new")
+  }
+
+  const fillsCurrent = target === "current" && current !== null
+  const createsNew = !fillsCurrent || !currentSaved
+  const atLimit = createsNew && limit !== null && savedCount >= limit
+
   const generate = async () => {
+    if (!fillsCurrent && currentDirty && !window.confirm("Discard unsaved changes to the current brand kit?")) return
     setBusy(true)
     try {
       const measured: string[] = []
@@ -86,7 +108,7 @@ export function BrandGenerator({
           // Cross-origin or unsupported image: the model still sees the image itself.
         }
       }
-      const base = target === "current" && current ? current : emptyBrandProfile(crypto.randomUUID(), "New brand kit")
+      const base = fillsCurrent && current ? current : emptyBrandProfile(crypto.randomUUID(), "New brand kit")
       const result = await generateBrandProfile(
         workspace.slug,
         { prompt, logoAssetId: logo?.id ?? null, referenceAssetIds: references.map((r) => r.id), measuredColors: measured },
@@ -98,6 +120,10 @@ export function BrandGenerator({
       }
       onGenerated(result.data)
       onOpenChange(false)
+      // Ready for the next kit.
+      setPrompt("")
+      setLogo(null)
+      setReferences([])
       toast.success("Brand kit drafted. Review it, then save.", {
         description: result.imagesUsed ? `Built from your description and ${result.imagesUsed} image${result.imagesUsed === 1 ? "" : "s"}.` : undefined,
       })
@@ -175,12 +201,18 @@ export function BrandGenerator({
           {current ? (
             <RadioGroup value={target} onValueChange={(v) => setTarget(v as "new" | "current")} className="gap-2">
               <label className="flex items-center gap-2 text-sm">
-                <RadioGroupItem value="new" /> Create a new brand kit
+                <RadioGroupItem value="new" /> Create another brand kit
               </label>
               <label className="flex items-center gap-2 text-sm">
                 <RadioGroupItem value="current" /> Fill &ldquo;{current.name}&rdquo; (replaces its fields; nothing is saved until you click Save)
               </label>
             </RadioGroup>
+          ) : null}
+          {atLimit ? (
+            <p className="rounded-md bg-warning-subtle px-3 py-2 text-xs" role="status">
+              Your plan includes {limit} brand kit{limit === 1 ? "" : "s"} and you have {savedCount}. You can generate a draft, but
+              saving it as a new kit needs a plan upgrade or deleting an unused kit. Filling an existing kit always works.
+            </p>
           ) : null}
         </div>
 

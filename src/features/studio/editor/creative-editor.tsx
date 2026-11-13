@@ -10,6 +10,7 @@ import {
   Download,
   Loader2,
   MoreHorizontal,
+  Palette,
   Redo2,
   Scaling,
   Send,
@@ -54,6 +55,7 @@ import { PropertiesPanel } from "@/features/studio/editor/properties-panel"
 import { useHistory } from "@/features/studio/editor/use-history"
 import { resizeDocument, type Background, type DesignDocument, type Layer } from "@/lib/creative/document"
 import { CREATIVE_FORMATS, getFormat } from "@/lib/creative/formats"
+import { applyBrandKit, type BrandKitStyle } from "@/lib/creative/rebrand"
 import type { CreativeProject } from "@/lib/domain/creative"
 import type { MediaAsset } from "@/lib/domain/media"
 import { workspaceHref } from "@/lib/navigation"
@@ -64,12 +66,13 @@ const ZOOMS = { fit: "Fit", "0.25": "25%", "0.5": "50%", "0.75": "75%", "1": "10
 export function CreativeEditor({
   project: initialProject,
   initialAssetUrls,
-  swatches,
+  brandKits,
   imageConfigured,
 }: {
   project: CreativeProject
   initialAssetUrls: AssetUrls
-  swatches: string[]
+  /** All brand kits (the default first); the design can be switched to any of them. */
+  brandKits: (BrandKitStyle & { isDefault: boolean })[]
   imageConfigured: boolean
 }) {
   const { workspace, aiConfigured } = useWorkspace()
@@ -80,6 +83,11 @@ export function CreativeEditor({
   const history = useHistory<DesignDocument>(initialProject.document)
   const doc = history.present
   const [name, setName] = useState(initialProject.name)
+  const [brandId, setBrandId] = useState<string | null>(
+    brandKits.find((k) => k.id === initialProject.brandProfileId)?.id ?? brandKits.find((k) => k.isDefault)?.id ?? brandKits[0]?.id ?? null
+  )
+  const brandKit = brandKits.find((k) => k.id === brandId) ?? null
+  const swatches = useMemo(() => (brandKit?.colors ?? []).map((c) => c.hex), [brandKit])
   const [pageIndex, setPageIndex] = useState(0)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [assetUrls, setAssetUrls] = useState<AssetUrls>(initialAssetUrls)
@@ -99,22 +107,23 @@ export function CreativeEditor({
   const selected = page.layers.find((l) => l.id === selectedId) ?? null
 
   // ---- autosave -----------------------------------------------------------
-  const [saved, setSaved] = useState({ doc: initialProject.document, name: initialProject.name })
-  const dirty = saved.doc !== doc || saved.name !== name
+  const [saved, setSaved] = useState({ doc: initialProject.document, name: initialProject.name, brandId })
+  const dirty = saved.doc !== doc || saved.name !== name || saved.brandId !== brandId
   const saveState: SaveState = request === "saving" ? "saving" : request === "error" ? "error" : dirty ? "dirty" : "saved"
 
   const persist = useCallback(
-    async (document: DesignDocument, projectName: string) => {
+    async (document: DesignDocument, projectName: string, brandProfileId: string | null) => {
       setRequest("saving")
       const result = await saveProject(workspace.slug, {
         ...initialProject,
+        brandProfileId,
         name: projectName.trim() || "Untitled design",
         formatId: document.formatId,
         platform: getFormat(document.formatId).platform,
         document,
       })
       if (result.ok) {
-        setSaved({ doc: document, name: projectName })
+        setSaved({ doc: document, name: projectName, brandId: brandProfileId })
         setRequest("idle")
       } else {
         setRequest("error")
@@ -126,9 +135,18 @@ export function CreativeEditor({
 
   useEffect(() => {
     if (!dirty || !canEdit) return
-    const timer = setTimeout(() => void persist(doc, name), 1200)
+    const timer = setTimeout(() => void persist(doc, name, brandId), 1200)
     return () => clearTimeout(timer)
-  }, [doc, name, dirty, persist, canEdit])
+  }, [doc, name, brandId, dirty, persist, canEdit])
+
+  /** Re-skins the design with another brand kit: colours, fonts, logo, icon style and corners. */
+  const switchBrand = (id: string) => {
+    const next = brandKits.find((k) => k.id === id)
+    if (!next || id === brandId) return
+    history.apply((d) => applyBrandKit(d, brandKit, next))
+    setBrandId(id)
+    toast.success(`Applied the "${next.name}" brand kit`, { description: "Undo (Ctrl+Z) restores the previous look." })
+  }
 
   useEffect(() => {
     const warn = (event: BeforeUnloadEvent) => {
@@ -184,7 +202,7 @@ export function CreativeEditor({
         history.redo()
       } else if (mod && event.key.toLowerCase() === "s") {
         event.preventDefault()
-        void persist(doc, name)
+        void persist(doc, name, brandId)
       } else if (typing) {
         return
       } else if (mod && event.key.toLowerCase() === "d" && selectedId) {
@@ -205,7 +223,7 @@ export function CreativeEditor({
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [history, persist, doc, name, selectedId, selected, duplicateSelected, removeSelected, patchLayer])
+  }, [history, persist, doc, name, brandId, selectedId, selected, duplicateSelected, removeSelected, patchLayer])
 
   // ---- images -------------------------------------------------------------
   const applyAsset = (asset: MediaAsset, target: "layer" | "background" | "new-layer") => {
@@ -272,7 +290,7 @@ export function CreativeEditor({
   const toPlanner = async () => {
     setBusy("planner")
     try {
-      await persist(doc, name)
+      await persist(doc, name, brandId)
       const blobs = await renderPages()
       const form = new FormData()
       form.set("projectId", initialProject.id)
@@ -296,7 +314,7 @@ export function CreativeEditor({
   const loadVariations = async () => {
     setBusy("variations")
     setVariations([])
-    await persist(doc, name)
+    await persist(doc, name, brandId)
     const result = await generateVariations(workspace.slug, initialProject.id)
     setBusy(null)
     if (result.ok) setVariations(result.data)
@@ -349,6 +367,28 @@ export function CreativeEditor({
             </TooltipTrigger>
             <TooltipContent>Redo (Ctrl+Shift+Z)</TooltipContent>
           </Tooltip>
+          {brandKits.length ? (
+            <Select value={brandId ?? ""} onValueChange={(v) => switchBrand(v as string)} disabled={!canEdit}>
+              <SelectTrigger size="sm" className="max-w-44" aria-label="Brand kit">
+                <SelectValue>
+                  <Palette className="text-muted-foreground" />
+                  <span className="truncate">{brandKit?.name ?? "Brand kit"}</span>
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {brandKits.map((k) => (
+                  <SelectItem key={k.id} value={k.id}>
+                    <span className="flex -space-x-1" aria-hidden>
+                      {(k.colors.length ? k.colors.map((c) => c.hex) : ["#d4d4d4"]).slice(0, 3).map((hex, i) => (
+                        <span key={i} className="size-3 rounded-full border border-background" style={{ backgroundColor: hex }} />
+                      ))}
+                    </span>
+                    {k.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : null}
           <Select value={zoom} onValueChange={(v) => setZoom(v as keyof typeof ZOOMS)}>
             <SelectTrigger size="sm" className="hidden w-20 md:flex" aria-label="Zoom"><SelectValue>{ZOOMS[zoom]}</SelectValue></SelectTrigger>
             <SelectContent>
@@ -373,7 +413,7 @@ export function CreativeEditor({
               <DropdownMenuItem
                 disabled={!canEdit}
                 onSelect={async () => {
-                  await persist(doc, name)
+                  await persist(doc, name, brandId)
                   const result = await duplicateProject(workspace.slug, initialProject.id)
                   if (result.ok) router.push(`${studio}/${result.data.projectId}`)
                   else toast.error(result.error)

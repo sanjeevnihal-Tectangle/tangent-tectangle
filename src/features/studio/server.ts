@@ -6,15 +6,16 @@ import type { ComposeContext } from "@/lib/creative/layout"
 import type { WorkspaceRepository } from "@/lib/data/types"
 import type { WorkspaceContext } from "@/lib/domain/workspace"
 
-export function loadStudioBrand(repository: WorkspaceRepository, context: WorkspaceContext) {
-  return loadDesignBrand(repository, context.workspace.name)
+export function loadStudioBrand(repository: WorkspaceRepository, context: WorkspaceContext, brandProfileId?: string | null) {
+  return loadDesignBrand(repository, context.workspace.name, brandProfileId)
 }
 
 export function composeContext(
   repository: WorkspaceRepository,
   context: WorkspaceContext,
   format: CreativeFormat,
-  imageAssetId: string | null
+  imageAssetId: string | null,
+  brandProfileId?: string | null
 ): Promise<{ ctx: ComposeContext; brandProfileId: string | null; brandStyleText: string }> {
-  return designComposeContext(repository, context.workspace.name, format, imageAssetId)
+  return designComposeContext(repository, context.workspace.name, format, imageAssetId, brandProfileId)
 }

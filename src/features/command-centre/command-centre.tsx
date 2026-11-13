@@ -18,6 +18,7 @@ import { useRouter } from "next/navigation"
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react"
 import { toast } from "sonner"
 
+import { BrandProductPicker } from "@/components/brand/brand-product-picker"
 import { TangentMark } from "@/components/brand/tangent-logo"
 import { DemoBadge } from "@/components/data/demo-badge"
 import { useCan, useWorkspace } from "@/components/workspace/workspace-provider"
@@ -33,6 +34,7 @@ import { RunView } from "@/features/command-centre/run-view"
 import { useCommandRun } from "@/features/command-centre/use-command-run"
 import { ACTIVE_AGENT_IDS, AGENT_IDS, AGENTS } from "@/lib/ai/agents/definitions"
 import type { ApprovalView } from "@/lib/domain/approvals"
+import type { BrandOption, ProductOption } from "@/lib/domain/brand-options"
 import type { Conversation, ConversationSummary, RunRecord } from "@/lib/domain/conversations"
 import { workspaceHref } from "@/lib/navigation"
 import { cn } from "@/lib/utils"
@@ -64,6 +66,8 @@ export interface CommandCentreProps {
   approvals: ApprovalView[]
   business: BusinessSummary | null
   brandName: string | null
+  brands: BrandOption[]
+  products: ProductOption[]
 }
 
 function emptyRun(runId: string): RunRecord {
@@ -117,6 +121,11 @@ export function CommandCentre(props: CommandCentreProps) {
   const [messages, setMessages] = useState<DisplayMessage[]>(() => toDisplay(props.active))
   const [draft, setDraft] = useState(props.initialPrompt ?? "")
   const [error, setError] = useState<string | null>(null)
+  // Brand kit (null = automatic) and product (undefined = detect from the request) for the next run.
+  const [target, setTarget] = useState<{ brandId: string | null; productId: string | null | undefined }>({
+    brandId: null,
+    productId: undefined,
+  })
   const bottomRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
 
@@ -163,6 +172,8 @@ export function CommandCentre(props: CommandCentreProps) {
       workspace: workspace.slug,
       conversationId,
       message,
+      brandProfileId: target.brandId,
+      productId: target.productId,
       onConversation: (id) => {
         if (id === conversationId) return
         setConversationId(id)
@@ -486,6 +497,16 @@ export function CommandCentre(props: CommandCentreProps) {
                 )}
               </div>
             </form>
+            <BrandProductPicker
+              brands={props.brands}
+              products={props.products}
+              brandId={target.brandId}
+              productId={target.productId}
+              onChange={setTarget}
+              allowDetect
+              size="sm"
+              disabled={running}
+            />
             <p className="text-center text-[0.7rem] text-muted-foreground">
               Agents create drafts and plans only. Publishing, ad launches and spend always need your approval.
             </p>

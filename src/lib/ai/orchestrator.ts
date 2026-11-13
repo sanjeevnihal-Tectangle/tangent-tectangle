@@ -31,6 +31,10 @@ export interface OrchestratorInput {
   maxSteps: number
   /** Business name fallback for designs when no business profile exists. */
   workspaceName: string
+  /** Brand kit the user picked for this request (null = automatic). */
+  brandProfileId?: string | null
+  /** Product the user picked: an id, null for none, undefined to detect it from the request. */
+  productId?: string | null
   /** Image generator available to the Graphic Designer (null when not configured) and the plan quota check. */
   images: { provider: ImageProvider | null; quotaError: string | null }
   signal?: AbortSignal
@@ -251,7 +255,8 @@ export async function* runOrchestrator(
     yield { type: "stage", stage: "understanding", status: "done" }
 
     yield { type: "stage", stage: "context", status: "active" }
-    let context = await loadBusinessContext(repository)
+    const chosenBrandId = input.brandProfileId ?? undefined
+    let context = await loadBusinessContext(repository, chosenBrandId, input.productId ?? undefined)
     let connections: PlatformConnection[] = []
     try {
       connections = summarizeConnections(await repository.listConnectedAccounts())
@@ -291,9 +296,13 @@ export async function* runOrchestrator(
     )
     const plan = needsImage ? { ...planResult.data, produceImage: true } : planResult.data
     // The product the request is about: its details and its brand kit drive every agent and the design.
-    const focus = plan.productNames.map((name) => matchProduct(context.products, name)).find((p): p is Product => p !== null) ?? null
+    // A product picked in the app wins; otherwise detect it from the request (unless the user chose "no product").
+    const focus =
+      input.productId === undefined
+        ? (plan.productNames.map((name) => matchProduct(context.products, name)).find((p): p is Product => p !== null) ?? null)
+        : null
     if (focus) {
-      context = await loadBusinessContext(repository, undefined, focus.id)
+      context = await loadBusinessContext(repository, chosenBrandId, focus.id)
       agentContext = `${context.text}\n\n## Connected platforms\n${connectionText}`
       run.contextSources = [
         ...context.sources,

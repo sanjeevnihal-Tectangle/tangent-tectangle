@@ -3,6 +3,7 @@ import { Suspense } from "react"
 
 import { Skeleton } from "@/components/ui/skeleton"
 import { CommandCentre } from "@/features/command-centre/command-centre"
+import { brandOptions, productOptions } from "@/lib/domain/brand-options"
 import { resolveWorkspace } from "@/lib/workspace/server"
 
 export const metadata: Metadata = { title: "AI Command Centre" }
@@ -19,12 +20,13 @@ async function CommandCentreLoader({ params, searchParams }: Props) {
   const prompt = first(query.prompt)
 
   const { repository } = await resolveWorkspace(orgSlug)
-  const [conversations, active, approvals, profile, brands] = await Promise.all([
+  const [conversations, active, approvals, profile, brands, products] = await Promise.all([
     repository.listConversations(),
     conversationId ? repository.getConversation(conversationId) : Promise.resolve(null),
     repository.listApprovals(),
     repository.getBusinessProfile(),
     repository.listBrandProfiles(),
+    repository.listProducts().catch(() => []),
   ])
   const brand = brands.find((b) => b.isDefault) ?? brands[0] ?? null
 
@@ -45,6 +47,8 @@ async function CommandCentreLoader({ params, searchParams }: Props) {
           : null
       }
       brandName={brand?.name ?? null}
+      brands={brandOptions(brands)}
+      products={productOptions(products)}
     />
   )
 }

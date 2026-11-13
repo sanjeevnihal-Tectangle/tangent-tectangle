@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation"
 import { useMemo, useState, useTransition } from "react"
 import { toast } from "sonner"
 
+import { BrandProductPicker } from "@/components/brand/brand-product-picker"
 import { NotConfigured } from "@/components/states/states"
 import { useWorkspace } from "@/components/workspace/workspace-provider"
 import { Badge } from "@/components/ui/badge"
@@ -24,6 +25,7 @@ import {
   type CreativeFormat,
   type CreativePlatform,
 } from "@/lib/creative/formats"
+import type { BrandOption, ProductOption } from "@/lib/domain/brand-options"
 import type { MediaAsset } from "@/lib/domain/media"
 import { workspaceHref } from "@/lib/navigation"
 import { cn } from "@/lib/utils"
@@ -45,12 +47,20 @@ export function CreateWizard({
   initialImage,
   initialBrief,
   imageConfigured,
+  brands,
+  products,
+  initialBrandId,
+  initialProductId,
 }: {
   initialFormatId: string | null
   category: "image" | "social" | "ad" | null
   initialImage: MediaAsset | null
   initialBrief: string
   imageConfigured: boolean
+  brands: BrandOption[]
+  products: ProductOption[]
+  initialBrandId: string | null
+  initialProductId: string | null
 }) {
   const { workspace, aiConfigured } = useWorkspace()
   const router = useRouter()
@@ -68,6 +78,11 @@ export function CreateWizard({
   const [ideas, setIdeas] = useState<string[]>([])
   const [concepts, setConcepts] = useState<Concept[] | null>(null)
   const [selected, setSelected] = useState<number | null>(null)
+  const [target, setTarget] = useState<{ brandId: string | null; productId: string | null | undefined }>({
+    brandId: initialBrandId,
+    productId: initialProductId,
+  })
+  const designTarget = { brandProfileId: target.brandId, productId: target.productId ?? null }
   const [busy, setBusy] = useState<null | "ideas" | "concepts" | "design" | "image" | "blank">(null)
   const [, startTransition] = useTransition()
 
@@ -96,7 +111,7 @@ export function CreateWizard({
   const loadIdeas = () =>
     run("ideas", async () => {
       if (!format) return
-      const result = await suggestIdeas(workspace.slug, { objective, formatId: format.id })
+      const result = await suggestIdeas(workspace.slug, { objective, formatId: format.id, ...designTarget })
       if (result.ok) setIdeas(result.data)
       else toast.error(result.error)
     })
@@ -108,7 +123,7 @@ export function CreateWizard({
     setConcepts(null)
     setSelected(null)
     run("concepts", async () => {
-      const result = await generateConcepts(workspace.slug, { objective, formatId: format.id, description })
+      const result = await generateConcepts(workspace.slug, { objective, formatId: format.id, description, ...designTarget })
       if (result.ok) {
         setConcepts(result.data)
         setSelected(0)
@@ -139,6 +154,7 @@ export function CreateWizard({
         description,
         concept: concept ? { name: concept.name, visualDirection: concept.visualDirection, imagePrompt: concept.imagePrompt } : null,
         imageAssetId: image?.id ?? null,
+        ...designTarget,
       })
       if (result.ok) router.push(`${studio}/${result.data.projectId}`)
       else toast.error(result.error)
@@ -147,7 +163,7 @@ export function CreateWizard({
   const makeBlank = () =>
     run("blank", async () => {
       if (!format) return
-      const result = await createBlank(workspace.slug, format.id)
+      const result = await createBlank(workspace.slug, format.id, designTarget)
       if (result.ok) router.push(`${studio}/${result.data.projectId}`)
       else toast.error(result.error)
     })
@@ -164,6 +180,26 @@ export function CreateWizard({
           <h1 className="text-xl font-semibold">Create a design</h1>
           <p className="text-sm text-muted-foreground">Tangent&apos;s Graphic Designer and Copywriter work from your brand kit.</p>
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2">
+        <span className="text-xs text-muted-foreground">Designing for</span>
+        <BrandProductPicker
+          brands={brands}
+          products={products}
+          brandId={target.brandId}
+          productId={target.productId ?? null}
+          onChange={(next) => {
+            setTarget(next)
+            // Ideas and concepts were written for the previous brand/product.
+            setIdeas([])
+            setConcepts(null)
+            setSelected(null)
+            if (step === 3) setStep(2)
+          }}
+          size="sm"
+          disabled={busy !== null}
+        />
       </div>
 
       <ol className="flex flex-wrap gap-2" aria-label="Steps">

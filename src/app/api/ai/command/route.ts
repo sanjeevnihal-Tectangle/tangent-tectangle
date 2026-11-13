@@ -22,6 +22,9 @@ const requestSchema = z.object({
   workspace: z.string().min(1).max(64),
   conversationId: z.string().min(1).max(64).nullable(),
   message: z.string().trim().min(2, "Write an instruction").max(4000),
+  brandProfileId: z.string().max(64).nullable().optional(),
+  /** null = no specific product; absent = detect from the message. */
+  productId: z.string().max(64).nullable().optional(),
 })
 
 function errorResponse(code: RunErrorCode, message: string, status: number) {
@@ -33,7 +36,7 @@ export async function POST(request: Request) {
   if (!parsed.success) {
     return errorResponse("invalid_request", parsed.error.issues[0]?.message ?? "Invalid request", 400)
   }
-  const { workspace, conversationId, message } = parsed.data
+  const { workspace, conversationId, message, brandProfileId, productId } = parsed.data
 
   const { context, repository } = await resolveWorkspace(workspace)
   if (!context.permissions.includes("ai.run")) {
@@ -93,6 +96,8 @@ export async function POST(request: Request) {
         message,
         maxSteps: serverEnv().AI_MAX_STEPS_PER_RUN,
         workspaceName: context.workspace.name,
+        brandProfileId: brandProfileId ?? null,
+        productId,
         images: {
           provider: getImageProvider(),
           quotaError: quotaError(context, "image_generations_monthly", 1),

@@ -5,6 +5,7 @@ import { PageContainer } from "@/components/page/page-header"
 import { Skeleton } from "@/components/ui/skeleton"
 import { CreateWizard } from "@/features/studio/create-wizard"
 import { getImageProvider } from "@/lib/ai/image-provider"
+import { brandOptions, productOptions } from "@/lib/domain/brand-options"
 import { resolveWorkspace } from "@/lib/workspace/server"
 
 export const metadata: Metadata = { title: "Create a design" }
@@ -21,10 +22,13 @@ async function WizardLoader({ params, searchParams }: Props) {
   const imageId = first(query.image)
   const category = first(query.category)
   let initialImage = null
+  const [brands, products] = await Promise.all([repository.listBrandProfiles(), repository.listProducts().catch(() => [])])
   if (imageId) {
     const assets = await repository.listAssets({ limit: 300 })
     initialImage = assets.find((a) => a.id === imageId) ?? null
   }
+  const brandId = first(query.brand)
+  const productId = first(query.product)
   return (
     <CreateWizard
       initialFormatId={first(query.format)}
@@ -32,6 +36,10 @@ async function WizardLoader({ params, searchParams }: Props) {
       initialImage={initialImage}
       initialBrief={(first(query.brief) ?? "").slice(0, 2000)}
       imageConfigured={getImageProvider() !== null}
+      brands={brandOptions(brands)}
+      products={productOptions(products)}
+      initialBrandId={brands.some((b) => b.id === brandId) ? brandId : null}
+      initialProductId={products.some((p) => p.id === productId) ? productId : null}
     />
   )
 }

@@ -55,7 +55,7 @@ blocks a request outright. Every run logs the models that actually answered (`ag
 understand → retrieve context (+ connections) → plan → execute agent + tool steps → validate → approval cards → present
 ```
 
-1. **Understand / plan** — the fast model returns an `ExecutionPlan` (intent, `requestBrief` — every specific the user asked for, in their words — task type, 1–4 steps assigned only to *active* agents, requested external actions, `produceImage`, limitations). Every agent receives the request plus `requestBrief`. `productNames` names the catalogue product the request is about; the run then reloads context with that product's details and **its own brand kit** (falling back to the company's default kit). A post planned for Instagram always sets `produceImage`.
+1. **Understand / plan** — the fast model returns an `ExecutionPlan` (intent, `requestBrief` — every specific the user asked for, in their words — task type, 1–4 steps assigned only to *active* agents, requested external actions, `produceImage`, limitations). Every agent receives the request plus `requestBrief`. `productNames` names the catalogue product the request is about; the run then reloads context with that product's details and **its own brand kit** (falling back to the company's default kit). The composer's **Brand kit / Product pickers** override this: a picked product skips detection, a picked kit wins over the product's kit, and "No specific product" disables detection. A post planned for Instagram always sets `produceImage`.
 2. **Retrieve context** — `loadBusinessContext` (business profile, products & services catalogue, approved intelligence, brand kit incl. visual style) plus the workspace's connected accounts (`summarizeConnections`), so the planner and every agent see which platforms are connected and ready (sources are shown to the user).
 3. **Normalise** — enforce `AI_MAX_STEPS_PER_RUN` and per-agent `maxCallsPerRun`; dropped steps become limitations.
 4. **Execute** — steps run sequentially; each receives the business context, the user request, its instruction and the text of earlier outputs (so the Designer can build on the Copywriter). A failed step is reported and the run continues.
@@ -129,3 +129,8 @@ checkpointing changes the runtime, not the agent handlers, schemas or events.
 - Per-agent `maxOutputTokens`.
 - Per-workspace monthly AI credits (`ai_credits_monthly` entitlement), checked before each run with an upper-bound reservation.
 - Provider timeouts (120 s) and retries (2); requests are cancellable from the UI (Stop) via `AbortSignal`.
+
+## Brand kits in Creative Studio
+
+- The create wizard has the same Brand kit / Product pickers; ideas, concepts, the composed design and blank canvases all use the chosen kit (or the product's kit when the kit is "Automatic").
+- The design editor has a **Brand kit** switcher. `applyBrandKit` (`lib/creative/rebrand.ts`) re-skins the existing design without losing edits: brand colours swap role for role (tints/shades keep their offset), text contrast is re-checked, brand fonts, icon style and corners are re-applied and the logo is replaced (hidden if the new kit has none). It is one undo step; the project's `brandProfileId` is saved with the design.

@@ -462,6 +462,9 @@ export function BrandManager({ initial }: { initial: BrandProfile[] }) {
         open={generatorOpen}
         onOpenChange={setGeneratorOpen}
         current={draft}
+        currentSaved={Boolean(saved)}
+        currentDirty={dirty}
+        savedCount={brands.length}
         onGenerated={(generated) => {
           setSelectedId(generated.id)
           setDraft(generated)
