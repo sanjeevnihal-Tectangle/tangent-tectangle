@@ -90,7 +90,9 @@ export async function GET(
     const message =
       error instanceof IntegrationError
         ? error.message
-        : "Could not complete OAuth account connection."
+        : error instanceof Error && error.name === "RepositoryError"
+          ? `Could not save the connection: ${error.message}`
+          : "Could not complete OAuth account connection."
     integrationsUrl.searchParams.set("error", message)
     return NextResponse.redirect(integrationsUrl)
   }

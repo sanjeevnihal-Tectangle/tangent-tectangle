@@ -876,14 +876,21 @@ export function createSupabaseRepository(
           .select("id")
           .single()
 
-        if (!accErr && row) {
+        // Never fall back to the local store here: on a serverless host it is
+        // per-instance memory, so the connection would vanish on the next request.
+        if (accErr || !row) {
+          console.error("[tangent] saving connected account failed:", accErr?.message)
+          throw new RepositoryError("Save connected account", {
+            message: accErr?.message ?? "the database returned no row",
+          })
+        }
+        {
           if (input.accessTokenCiphertext) {
-            const { error: credError } = await admin.schema("private").from("integration_credentials").upsert({
-              connected_account_id: row.id,
-              access_token_ciphertext: input.accessTokenCiphertext,
-              refresh_token_ciphertext: input.refreshTokenCiphertext ?? null,
-              key_version: input.keyVersion ?? 1,
-              updated_at: now,
+            const { error: credError } = await admin.rpc("store_integration_credential", {
+              p_connected_account_id: row.id,
+              p_access_token_ciphertext: input.accessTokenCiphertext,
+              p_refresh_token_ciphertext: input.refreshTokenCiphertext ?? null,
+              p_key_version: input.keyVersion ?? 1,
             })
             if (credError) {
               // Without the stored token the account can't publish, so don't show it as healthy.
@@ -893,6 +900,9 @@ export function createSupabaseRepository(
                 .update({ status: "error", last_error: "The access token could not be stored in the credential vault. Reconnect the account." })
                 .eq("organization_id", organizationId)
                 .eq("id", row.id)
+              throw new RepositoryError("Store access token", {
+                message: `${credError.message}. Run the latest Supabase migration (store_integration_credential), then reconnect.`,
+              })
             }
           }
           if (input.provider === "meta_ads" || input.provider === "meta" || input.provider === "google_ads") {
@@ -932,6 +942,12 @@ export function createSupabaseRepository(
         }
       }
 
+      if (process.env.NODE_ENV === "production") {
+        throw new RepositoryError("Save connected account", {
+          message: "SUPABASE_SERVICE_ROLE_KEY is not configured on the server, so connections can't be stored",
+        })
+      }
+      // Local development without a service-role key only.
       return saveLocalConnectedAccount(
         organizationId,
         {
@@ -985,15 +1001,11 @@ export function createSupabaseRepository(
       ) as { id: string } | null
       if (!owned) return null
       const admin = requireAdmin("Load integration credential")
-      const row = check(
+      const rows = check(
         "Load integration credential",
-        await admin
-          .schema("private")
-          .from("integration_credentials")
-          .select("access_token_ciphertext, refresh_token_ciphertext, key_version")
-          .eq("connected_account_id", id)
-          .maybeSingle()
-      ) as { access_token_ciphertext: string; refresh_token_ciphertext: string | null; key_version: number } | null
+        await admin.rpc("get_integration_credential", { p_connected_account_id: id })
+      ) as { access_token_ciphertext: string; refresh_token_ciphertext: string | null; key_version: number }[] | null
+      const row = rows?.[0] ?? null
       if (!row) return null
       return {
         accessTokenCiphertext: row.access_token_ciphertext,

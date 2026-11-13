@@ -13,6 +13,17 @@ import { getAdapter, IntegrationError } from "@/lib/integrations/gateway"
 import { INTEGRATION_GUIDES } from "@/lib/integrations/guides"
 import { invalidateWorkspaceCache, resolveWorkspace } from "@/lib/workspace/server"
 
+function saveFailure(error: unknown): { ok: false; error: string } {
+  console.error("[tangent] saving connection failed", error)
+  return {
+    ok: false,
+    error:
+      error instanceof Error && error.name === "RepositoryError"
+        ? `Couldn't save the connection: ${error.message}`
+        : "Couldn't save the connection. Try again.",
+  }
+}
+
 export type IntegrationActionResult<T = undefined> =
   | { ok: true; data: T }
   | { ok: false; error: string }
@@ -245,20 +256,25 @@ export async function connectIntegrationAccount(
     accessTokenCiphertext = encryptToken(accessToken, encKey, 1)
   }
 
-  const saved = await repository.saveConnectedAccount({
-    provider: providerId,
-    externalAccountId: resolvedExternalId,
-    displayName: resolvedName,
-    scopes,
-    status: "active",
-    tokenExpiresAt: null,
-    lastError: null,
-    accessTokenCiphertext,
-    refreshTokenCiphertext: null,
-    keyVersion: 1,
-    dailySpendLimitInr: dailySpendLimitInr ?? null,
-    monthlySpendLimitInr: monthlySpendLimitInr ?? null,
-  })
+  let saved: ConnectedAccountView
+  try {
+    saved = await repository.saveConnectedAccount({
+      provider: providerId,
+      externalAccountId: resolvedExternalId,
+      displayName: resolvedName,
+      scopes,
+      status: "active",
+      tokenExpiresAt: null,
+      lastError: null,
+      accessTokenCiphertext,
+      refreshTokenCiphertext: null,
+      keyVersion: 1,
+      dailySpendLimitInr: dailySpendLimitInr ?? null,
+      monthlySpendLimitInr: monthlySpendLimitInr ?? null,
+    })
+  } catch (error) {
+    return saveFailure(error)
+  }
 
   await repository.recordAudit({
     action: "integration.account_connected",
@@ -401,24 +417,29 @@ export async function connectMcpIntegration(
   const externalId = `mcp:${transport}:${endpointOrCommand}`
   const scopes = [`mcp:${transport}`, ...guide.mcp.availableTools]
 
-  const saved = await repository.saveConnectedAccount({
-    provider: providerId,
-    externalAccountId: externalId,
-    displayName: `${serverLabel} (MCP)`,
-    scopes,
-    status: "active",
-    tokenExpiresAt: null,
-    lastError: null,
-    accessTokenCiphertext,
-    refreshTokenCiphertext: null,
-    keyVersion: 1,
-    dailySpendLimitInr: guide.directConnect?.isAdAccount
-      ? (dailySpendLimitInr ?? 2500)
-      : null,
-    monthlySpendLimitInr: guide.directConnect?.isAdAccount
-      ? (monthlySpendLimitInr ?? 50000)
-      : null,
-  })
+  let saved: ConnectedAccountView
+  try {
+    saved = await repository.saveConnectedAccount({
+      provider: providerId,
+      externalAccountId: externalId,
+      displayName: `${serverLabel} (MCP)`,
+      scopes,
+      status: "active",
+      tokenExpiresAt: null,
+      lastError: null,
+      accessTokenCiphertext,
+      refreshTokenCiphertext: null,
+      keyVersion: 1,
+      dailySpendLimitInr: guide.directConnect?.isAdAccount
+        ? (dailySpendLimitInr ?? 2500)
+        : null,
+      monthlySpendLimitInr: guide.directConnect?.isAdAccount
+        ? (monthlySpendLimitInr ?? 50000)
+        : null,
+    })
+  } catch (error) {
+    return saveFailure(error)
+  }
 
   await repository.recordAudit({
     action: "integration.mcp_connected",

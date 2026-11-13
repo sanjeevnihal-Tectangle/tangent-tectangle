@@ -100,7 +100,7 @@ Images are referenced by media asset id; signed URLs are resolved per request.
 ## Security notes
 
 - Secrets are server-only env vars validated with Zod; nothing secret is prefixed `NEXT_PUBLIC_`.
-- OAuth tokens: encrypted, stored in `private.integration_credentials` (not exposed via the Data API).
+- OAuth tokens: encrypted, stored in `private.integration_credentials` (not exposed via the Data API). The server reads and writes it only through the service-role-only functions `store_integration_credential` / `get_integration_credential`. Connections are always saved to Supabase in production; the `.tangent-integrations.json` local store is for local development without a service-role key.
 - Audit log is append-only at the database level (trigger) and written through `log_audit_event` with the caller as actor.
 - Approval payloads are immutable (trigger); executors must call `assertExecutable` with the exact payload.
 - Redirect targets (`next`) are restricted to same-origin relative paths.
