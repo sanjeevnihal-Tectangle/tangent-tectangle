@@ -233,7 +233,12 @@ export async function* runOrchestrator(
     })
     usage = addUsage(usage, planResult.usage)
     modelsUsed.add(planResult.model)
-    const plan = planResult.data
+    // Instagram can't publish without an image, so a post planned for Instagram
+    // always gets one, even when the planner didn't flag produceImage.
+    const needsImage = planResult.data.externalActions.some(
+      (a) => a.actionType === "publish_post" && canonicalProvider(a.platform) === "instagram"
+    )
+    const plan = needsImage ? { ...planResult.data, produceImage: true } : planResult.data
     const normalized = normalizePlan(plan, input.maxSteps)
     const agentSteps = [...normalized.steps]
     if (plan.produceImage && !agentSteps.some((s) => s.agentId === "graphic_designer")) {
