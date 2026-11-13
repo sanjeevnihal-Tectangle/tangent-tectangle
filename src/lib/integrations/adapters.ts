@@ -148,11 +148,37 @@ function createMetaAdapter(
         }))
       }
 
+      if (id === "instagram" && /^IG/.test(tokens.accessToken.trim())) {
+        // "Instagram API with Instagram Login" token: one professional account, on graph.instagram.com.
+        const meUrl = new URL(`https://graph.instagram.com/${META_GRAPH_VERSION}/me`)
+        meUrl.searchParams.set("fields", "user_id,username")
+        meUrl.searchParams.set("access_token", tokens.accessToken)
+        const meRes = await fetch(meUrl)
+        const me = (await meRes.json().catch(() => null)) as
+          | { user_id?: string; id?: string; username?: string; error?: { message?: string } }
+          | null
+        if (!meRes.ok || !me || me.error) {
+          throw new IntegrationError(
+            `Instagram rejected the token${me?.error?.message ? `: ${me.error.message}` : ""}. Generate a new token for the account and try again.`,
+            "provider_error"
+          )
+        }
+        const igId = me.user_id ?? me.id
+        if (!igId) throw new IntegrationError("Instagram did not return the account id for this token.", "provider_error")
+        return [{ externalId: igId, displayName: me.username ? `@${me.username}` : igId, kind: "instagram_business" }]
+      }
+
       const url = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/me/accounts`)
       url.searchParams.set("fields", "id,name,instagram_business_account{id,username,name}")
       url.searchParams.set("access_token", tokens.accessToken)
       const res = await fetch(url)
-      if (!res.ok) throw new IntegrationError("Could not list Meta Pages", "provider_error")
+      if (!res.ok) {
+        const err = (await res.json().catch(() => null)) as { error?: { message?: string } } | null
+        throw new IntegrationError(
+          `Could not list Meta Pages${err?.error?.message ? `: ${err.error.message}` : ""}. The token needs pages_show_list (and instagram_basic for Instagram).`,
+          "provider_error"
+        )
+      }
       const body = (await res.json()) as {
         data?: {
           id: string
