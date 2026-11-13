@@ -246,8 +246,13 @@ export async function publishInstagramImage(input: {
   return { externalPostId: published.id, permalink }
 }
 
-/** Exchanges a user token for the Page's own token (needed to post as the Page). Falls back to the stored token. */
+/**
+ * Posting as a Page needs that Page's own token. Accepts a Page token for this
+ * Page, or a user/System User token that manages it (pages_manage_posts); any
+ * other token would post as a person, which Meta rejects with error 200.
+ */
 async function pageAccessToken(fetchImpl: FetchLike, pageId: string, accessToken: string): Promise<string> {
+  let lookupError: unknown = null
   try {
     const page = await graphCall<{ access_token?: string }>(
       fetchImpl,
@@ -256,12 +261,23 @@ async function pageAccessToken(fetchImpl: FetchLike, pageId: string, accessToken
       { fields: "access_token", access_token: accessToken },
       "Loading the Page access token"
     )
-    return page.access_token ?? accessToken
+    if (page.access_token) return page.access_token
   } catch (error) {
     if (error instanceof IntegrationError && error.code === "token_expired") throw error
-    // A token that is already a Page token can't read `access_token`; use it as-is.
-    return accessToken
+    lookupError = error
   }
+  // A Page token can't read `access_token`, but /me is the Page itself.
+  try {
+    const me = await graphCall<{ id?: string }>(fetchImpl, "GET", "me", { fields: "id", access_token: accessToken }, "Checking the Facebook token")
+    if (me.id === pageId) return accessToken
+  } catch (error) {
+    if (error instanceof IntegrationError && error.code === "token_expired") throw error
+  }
+  const detail = lookupError instanceof IntegrationError ? ` (${lookupError.message})` : ""
+  throw new IntegrationError(
+    `The saved Facebook token can't post as Page ${pageId}${detail}. Reconnect Facebook Pages with a Page access token for this Page, or a System User token that has the Page assigned and pages_manage_posts + pages_read_engagement.`,
+    "permission_denied"
+  )
 }
 
 /** Publishes a photo post (or a text post when there is no image) to a Facebook Page. */

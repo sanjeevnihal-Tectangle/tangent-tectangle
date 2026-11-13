@@ -220,6 +220,24 @@ describe("Meta Graph publishing", () => {
     expect(calls[1]!.body?.get("access_token")).toBe("page-token")
     expect(calls[1]!.body?.get("message")).toBe("Hello")
   })
+
+  it("accepts a Page token for the same Page", async () => {
+    const { fetchImpl, calls } = fakeGraph([
+      { __status: 400, error: { message: "(#100) Tried accessing nonexisting field (access_token)", code: 100 } },
+      { id: "1029" },
+      { id: "post-1" },
+    ])
+    await publishFacebookPost({ pageId: "1029", accessToken: "page-token", caption: "Hi", imageUrl: null, fetchImpl })
+    expect(calls[2]!.body?.get("access_token")).toBe("page-token")
+  })
+
+  it("refuses to post when the token can't act as the Page", async () => {
+    const { fetchImpl, calls } = fakeGraph([{}, { id: "someone-else" }])
+    await expect(
+      publishFacebookPost({ pageId: "1029", accessToken: "user-token", caption: "Hi", imageUrl: "https://img/x.jpg", fetchImpl })
+    ).rejects.toMatchObject({ code: "permission_denied", message: expect.stringContaining("can't post as Page 1029") })
+    expect(calls).toHaveLength(2)
+  })
 })
 
 describe("approve & publish executor", () => {
