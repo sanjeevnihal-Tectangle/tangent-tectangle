@@ -55,15 +55,17 @@ blocks a request outright. Every run logs the models that actually answered (`ag
 understand → retrieve context (+ connections) → plan → execute agent + tool steps → validate → approval cards → present
 ```
 
-1. **Understand / plan** — the fast model returns an `ExecutionPlan` (intent, task type, 1–4 steps assigned only to *active* agents, requested external actions, `produceImage`, limitations).
+1. **Understand / plan** — the fast model returns an `ExecutionPlan` (intent, `requestBrief` — every specific the user asked for, in their words — task type, 1–4 steps assigned only to *active* agents, requested external actions, `produceImage`, limitations). Every agent receives the request plus `requestBrief`. A post planned for Instagram always sets `produceImage`.
 2. **Retrieve context** — `loadBusinessContext` plus the workspace's connected accounts (`summarizeConnections`), so the planner and every agent see which platforms are connected and ready (sources are shown to the user).
 3. **Normalise** — enforce `AI_MAX_STEPS_PER_RUN` and per-agent `maxCallsPerRun`; dropped steps become limitations.
 4. **Execute** — steps run sequentially; each receives the business context, the user request, its instruction and the text of earlier outputs (so the Designer can build on the Copywriter). A failed step is reported and the run continues.
 5. **Validate** — Zod parse (structured outputs), brand prohibited-phrase scan, budget sanity checks.
 6. **Tool steps** (shown in the plan with the agent they belong to):
    - *Generate image* (Graphic Designer, when `produceImage`): renders the designer's first concept with `getImageProvider()` as a JPEG (Instagram only accepts JPEG; square when Instagram is a target), saves it to the Asset Library (`source: ai_generated`), meters `image_generations_monthly`, emits `asset.generated`.
+   - *Build the editable design* (Graphic Designer, after all agent steps, when an image was generated): `createAgentDesign` asks the fast model for a `DesignSpec` (layout, headline, CTA, badge, brand palette) from the request, concept and final copy, composes it with the layout engine over the generated photo and the brand logo, and saves it as a Creative Studio project (`creative_projects`, editable in the Studio). Emits `creative.created`. If it fails, the post falls back to the raw image.
    - *Prepare posts for approval* (Social Media Manager, when external actions were requested): `prepareExternalActions` picks the connected account, caption (copy variant for that platform) and image; brand-validation failures block it. Each ready post becomes an `approval_request` with the exact payload and an `action.required` event in state `awaiting_approval`. Otherwise the state is `connection_required`, `blocked` (with the reason) or `unsupported` (ads/spend, scheduling, platforms without a publisher).
 7. **Execute on approval** — nothing is posted during the run. The approval card's **Approve & publish** (or approving on the Approvals page) calls `approveAndPublish`, which requires `content.publish`, re-checks the payload hash, claims the request (`approved → executing`, compare-and-set so it can't run twice), decrypts the token server-side and publishes through the Meta Graph API. The card shows the post link/ID or Meta's error; failed posts can be retried as a new approval version.
+   Posts with a Creative Studio design (`creativeProjectId`, `designRendered: false`) can't be executed directly: the card shows the current design with **Edit in Creative Studio**, and **Approve & publish** renders the latest design in the browser (same renderer as the Studio, JPEG), uploads it, creates a new approval version whose payload points at that exact image (`designRendered: true`) and publishes it (`publishDesign`).
 8. **Present** — the fast model streams a concise summary using the actual tool results; detailed outputs render as typed cards.
 
 Every run produces: an assistant message with the full run record, an `agent_runs` row with `agent_tasks`, a `usage_records` entry (AI credits = 1 per started 1,000 tokens) and an audit event.
@@ -71,7 +73,7 @@ Every run produces: an assistant message with the full run record, an `agent_run
 ## Streaming events
 
 `run.started`, `stage` (understanding/context/planning/executing/validating/presenting × active/done), `context`, `plan`,
-`step.started`, `step.completed` (typed output), `step.failed`, `tool.completed`, `asset.generated`, `validation`, `action.required`, `message.delta`,
+`step.started`, `step.completed` (typed output), `step.failed`, `tool.completed`, `asset.generated`, `creative.created`, `validation`, `action.required`, `message.delta`,
 `run.completed` (usage, duration), `run.failed`. The client reduces them with `applyRunEvent` (pure, unit-tested) —
 users see meaningful progress, not a spinner.
 

@@ -1,4 +1,4 @@
-import { RUN_STAGES, type GeneratedAsset, type PlannedStep, type RequiredAction, type RunEvent, type RunStage, type ValidationCheck } from "@/lib/ai/events"
+import { RUN_STAGES, type GeneratedAsset, type GeneratedCreative, type PlannedStep, type RequiredAction, type RunEvent, type RunStage, type ValidationCheck } from "@/lib/ai/events"
 import type { AgentOutput, TaskType } from "@/lib/ai/outputs"
 import type { RunRecord } from "@/lib/domain/conversations"
 
@@ -19,6 +19,7 @@ export interface RunViewModel {
   validation: ValidationCheck[]
   actions: RequiredAction[]
   assets: GeneratedAsset[]
+  creatives: GeneratedCreative[]
   limitations: string[]
   text: string
   error: { code: string; message: string } | null
@@ -43,6 +44,7 @@ export function initialRunModel(): RunViewModel {
     validation: [],
     actions: [],
     assets: [],
+    creatives: [],
     limitations: [],
     text: "",
     error: null,
@@ -69,6 +71,7 @@ export function runModelFromRecord(record: RunRecord, text: string): RunViewMode
     validation: record.validation,
     actions: record.actions,
     assets: record.assets ?? [],
+    creatives: record.creatives ?? [],
     limitations: record.limitations,
     text,
     error: record.error,
@@ -112,6 +115,8 @@ export function applyRunEvent(model: RunViewModel, event: RunEvent): RunViewMode
       return { ...model, stepState: { ...model.stepState, [event.stepId]: "done" } }
     case "asset.generated":
       return { ...model, assets: [...model.assets, event.asset] }
+    case "creative.created":
+      return { ...model, creatives: [...model.creatives, event.creative] }
     case "validation":
       return { ...model, validation: event.checks }
     case "action.required":

@@ -9,9 +9,10 @@ import { aiQuotaError, meterAi, quotaError } from "@/lib/ai/metering"
 import type { CreativeOutput } from "@/lib/ai/outputs"
 import { getModelProvider, ProviderError } from "@/lib/ai/provider"
 import type { DesignDocument } from "@/lib/creative/document"
-import { CREATIVE_OBJECTIVES, getFormat, isFormatId, PLATFORM_LABELS, type CreativeFormat } from "@/lib/creative/formats"
+import { getFormat, isFormatId, type CreativeFormat } from "@/lib/creative/formats"
 import { composeContext } from "@/features/studio/server"
-import { composeDocument, DESIGN_LAYOUTS, designSpecSchema, LAYOUT_LABELS, type DesignSpec } from "@/lib/creative/layout"
+import { describeDesignTask, DESIGN_SYSTEM } from "@/lib/creative/agent-design"
+import { composeDocument, designSpecSchema, type DesignSpec } from "@/lib/creative/layout"
 import { CREATIVE_TEMPLATES, templateSpec } from "@/lib/creative/templates"
 import type { WorkspaceRepository } from "@/lib/data/types"
 import { CONTENT_FORMATS, type ContentItem, type ContentPlatform } from "@/lib/domain/content"
@@ -40,28 +41,8 @@ async function requireCreator(workspace: string) {
   return { ...resolved, denied: null }
 }
 
-function objectiveLabel(id: string): string {
-  return CREATIVE_OBJECTIVES.find((o) => o.id === id)?.label ?? id
-}
 
-const DESIGN_SYSTEM = `${SHARED_RULES}
-
-You are the Graphic Designer composing a finished marketing design. A layout engine positions everything; you decide:
-- layout: one of ${DESIGN_LAYOUTS.map((l) => `${l} (${LAYOUT_LABELS[l]})`).join(", ")}. Prefer split when a photo is available,
-  bold_type for punchy announcements and thumbnails, centered_hero for offers, corner_minimal for quotes and premium tone.
-- copy: headline ≤ 8 words, subheadline ≤ 16 words, CTA 2–4 words, optional very short badge. Follow the brand voice.
-- palette: background, text and accent hex colours chosen ONLY from the brand palette; text must contrast strongly with background.
-- backgroundStyle: "image" only if told a photo is available, otherwise "solid" or "gradient".
-- imagePrompt: a photographic prompt matching the concept (no text in the image).
-- slides: for carousel formats, 3–6 slides (headline + 1–2 sentence body) after the cover; otherwise an empty list.`
-
-function describeTask(format: CreativeFormat, objective: string, description: string): string {
-  return [
-    `Format: ${format.label} for ${PLATFORM_LABELS[format.platform]} (${format.width}×${format.height}px${format.maxPages > 1 ? `, carousel up to ${format.maxPages} slides` : ""})`,
-    `Objective: ${objectiveLabel(objective)}`,
-    `Brief: ${description || "(no brief — propose something fitting the business)"}`,
-  ].join("\n")
-}
+const describeTask = describeDesignTask
 
 // ---------------------------------------------------------------------------
 // Ideas and concepts

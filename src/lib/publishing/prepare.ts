@@ -21,6 +21,8 @@ export interface PrepareInput {
   connections: PlatformConnection[]
   copies: CopyOutput[]
   image: (GeneratedAsset & { mimeType: string }) | null
+  /** Editable Creative Studio design built from the image, published as the post image once approved. */
+  creative?: { projectId: string } | null
   /** Why no image is available (image generation failed or was not planned). */
   imageIssue: string | null
   /** Blocks publishing when validation found prohibited messaging. */
@@ -112,6 +114,7 @@ export function prepareExternalActions(input: PrepareInput): PreparedAction[] {
       accountName: usable.account.displayName,
       externalAccountId: usable.account.externalAccountId,
       title: (variant.headline || input.title).slice(0, 160),
+      ...(input.creative && image ? { creativeProjectId: input.creative.projectId, designRendered: false } : {}),
     }
     prepared.push({
       action: {
@@ -119,7 +122,7 @@ export function prepareExternalActions(input: PrepareInput): PreparedAction[] {
         state: "awaiting_approval",
         reason: usable.issue ?? undefined,
         account: { id: usable.account.id, name: usable.account.displayName },
-        preview: { caption: payload.caption, imageAssetId: payload.imageAssetId },
+        preview: { caption: payload.caption, imageAssetId: payload.imageAssetId, creativeProjectId: payload.creativeProjectId ?? null },
       },
       payload,
     })

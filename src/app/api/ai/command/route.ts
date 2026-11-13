@@ -92,6 +92,7 @@ export async function POST(request: Request) {
         history,
         message,
         maxSteps: serverEnv().AI_MAX_STEPS_PER_RUN,
+        workspaceName: context.workspace.name,
         images: {
           provider: getImageProvider(),
           quotaError: quotaError(context, "image_generations_monthly", 1),

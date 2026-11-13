@@ -132,6 +132,18 @@ describe("preparing external actions", () => {
     expect(prepared.every((p) => p.payload === null)).toBe(true)
   })
 
+  it("links posts to the Creative Studio design when one was built", () => {
+    const prepared = prepareExternalActions({
+      ...base,
+      creative: { projectId: "proj-1" },
+      externalActions: [{ actionType: "publish_post", platform: "Instagram", description: "" }],
+    })
+    const payload = prepared[0]!.payload!
+    expect(payload).toMatchObject({ creativeProjectId: "proj-1", designRendered: false })
+    expect(socialPostPayloadSchema.parse(payload)).toEqual(payload)
+    expect(prepared[0]!.action.preview?.creativeProjectId).toBe("proj-1")
+  })
+
   it("blocks publishing when brand validation failed", () => {
     const prepared = prepareExternalActions({ ...base, validationIssue: "Brand check failed", externalActions: [{ actionType: "publish_post", platform: "Facebook", description: "" }] })
     expect(prepared[0]!.action).toMatchObject({ state: "blocked", reason: "Brand check failed" })
@@ -334,6 +346,15 @@ describe("approve & publish executor", () => {
     const again = await approveAndPublish({ repository, approvalId: "appr-1", actorId: "user-1", fetchImpl })
     expect(again.approvalStatus).toBe("executed")
     expect(calls).toHaveLength(2)
+  })
+
+  it("won't publish a design's background photo in place of the rendered design", async () => {
+    const { repository, state } = await fakeRepository("pending", { ...payload, creativeProjectId: "proj-1", designRendered: false })
+    const { fetchImpl, calls } = fakeGraph([])
+    const result = await approveAndPublish({ repository, approvalId: "appr-1", actorId: "user-1", fetchImpl })
+    expect(result.error).toMatch(/Creative Studio design/)
+    expect(state.status).toBe("pending")
+    expect(calls).toHaveLength(0)
   })
 
   it("records Meta rejections as failed with the reason", async () => {

@@ -18,6 +18,13 @@ export const socialPostPayloadSchema = z.object({
   accountName: z.string(),
   externalAccountId: z.string().min(1),
   title: z.string().max(160),
+  /**
+   * Editable Creative Studio design for this post. While designRendered is not
+   * true, imageAssetId is only the background photo: the final image is the
+   * design rendered when the user approves (see publishDesign).
+   */
+  creativeProjectId: z.string().optional(),
+  designRendered: z.boolean().optional(),
 })
 export type SocialPostPayload = z.infer<typeof socialPostPayloadSchema>
 

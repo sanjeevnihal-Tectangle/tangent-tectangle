@@ -1,13 +1,24 @@
 "use client"
 
-import { AlertTriangle, CheckCircle2, ExternalLink, ImageIcon, Loader2, PlugZap, RotateCcw, Send, ShieldCheck, X } from "lucide-react"
+import { AlertTriangle, CheckCircle2, ExternalLink, ImageIcon, Loader2, PenLine, PlugZap, RotateCcw, Send, ShieldCheck, X } from "lucide-react"
 import Link from "next/link"
 import { useEffect, useState } from "react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { useCan, useWorkspace } from "@/components/workspace/workspace-provider"
-import { approvePublish, loadPublishStatuses, refreshAssetUrls, rejectPublish, retryPublish } from "@/features/command-centre/actions"
+import { DesignThumbnail } from "@/components/creative/design-renderer"
+import {
+  approvePublish,
+  loadCreativePreview,
+  loadPublishStatuses,
+  publishDesign,
+  refreshAssetUrls,
+  rejectPublish,
+  retryPublish,
+  type CreativePreview,
+} from "@/features/command-centre/actions"
+import { renderDesignJpeg } from "@/features/command-centre/design-render"
 import type { GeneratedAsset, RequiredAction } from "@/lib/ai/events"
 import { EXTERNAL_ACTION_LABELS } from "@/lib/approvals/engine"
 import { workspaceHref } from "@/lib/navigation"
@@ -120,6 +131,72 @@ function StatusLine({ status, platform }: { status: PublishStatus; platform: str
   }
 }
 
+
+/** The current Creative Studio design (refetched so edits made in the Studio show up). */
+function useCreativePreview(projectId: string | null | undefined) {
+  const { workspace } = useWorkspace()
+  const [preview, setPreview] = useState<CreativePreview | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!projectId) return
+    let cancelled = false
+    const load = () =>
+      void loadCreativePreview(workspace.slug, projectId).then((result) => {
+        if (cancelled) return
+        if (result.ok) {
+          setPreview(result.data)
+          setError(null)
+        } else setError(result.error)
+      })
+    load()
+    // Pick up edits made in Creative Studio in another tab.
+    window.addEventListener("focus", load)
+    return () => {
+      cancelled = true
+      window.removeEventListener("focus", load)
+    }
+  }, [projectId, workspace.slug])
+  return { preview, error }
+}
+
+/** Editable design preview with a link to edit it in Creative Studio. */
+export function CreativeDesignPreview({ projectId, width = 144 }: { projectId: string; width?: number }) {
+  const { workspace } = useWorkspace()
+  const { preview, error } = useCreativePreview(projectId)
+  return (
+    <div className="flex shrink-0 flex-col gap-1.5" style={{ width }}>
+      {preview ? (
+        <DesignThumbnail document={preview.document} assetUrls={preview.assetUrls} width={width} />
+      ) : (
+        <div className="flex aspect-square items-center justify-center rounded-md border bg-muted text-xs text-muted-foreground" style={{ width }}>
+          {error ?? <Loader2 className="size-4 animate-spin" />}
+        </div>
+      )}
+      <Button asChild size="sm" variant="outline" className="w-full">
+        <Link href={workspaceHref(workspace.slug, `studio/${projectId}`)} target="_blank">
+          <PenLine /> Edit in Creative Studio
+        </Link>
+      </Button>
+    </div>
+  )
+}
+
+/** Renders the latest version of the design and publishes it (used for approve and retry). */
+async function publishCreativePost(workspaceSlug: string, approvalId: string, projectId: string) {
+  const fresh = await loadCreativePreview(workspaceSlug, projectId)
+  if (!fresh.ok) return fresh
+  let image: Blob
+  try {
+    image = await renderDesignJpeg(fresh.data)
+  } catch (error) {
+    console.error(error)
+    return { ok: false as const, error: "Couldn't render the design. Open it in Creative Studio, check its images load, and try again." }
+  }
+  const form = new FormData()
+  form.set("image", new File([image], "design.jpg", { type: "image/jpeg" }))
+  return publishDesign(workspaceSlug, approvalId, form)
+}
+
 interface CardProps {
   action: RequiredAction
   assets: GeneratedAsset[]
@@ -145,7 +222,9 @@ function ApprovalCard({ action, assets, status, busy, canPublish, onApprove, onR
         </p>
       </div>
       <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-        {action.preview?.imageAssetId ? (
+        {action.preview?.creativeProjectId ? (
+          <CreativeDesignPreview projectId={action.preview.creativeProjectId} />
+        ) : action.preview?.imageAssetId ? (
           <AssetImage
             asset={{ assetId: action.preview.imageAssetId, name: image?.name ?? "Post image", url: image?.url ?? null }}
             className="aspect-square w-full shrink-0 rounded-md border sm:w-36"
@@ -166,7 +245,9 @@ function ApprovalCard({ action, assets, status, busy, canPublish, onApprove, onR
               <Button size="sm" variant="ghost" onClick={onReject} disabled={busy}>
                 <X /> Reject
               </Button>
-              <span className="text-xs text-muted-foreground">Nothing is posted until you approve.</span>
+              <span className="text-xs text-muted-foreground">
+                {action.preview?.creativeProjectId ? "Publishes the design as shown. Edit it first if you like. " : ""}Nothing is posted until you approve.
+              </span>
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">Waiting for a workspace owner or admin to approve publishing.</p>
@@ -261,12 +342,19 @@ export function ActionCards({ actions, assets }: { actions: RequiredAction[]; as
     else if (result.data.error) toast.error(result.data.error)
   }
 
+  // Posts with a Creative Studio design publish the rendered design; others publish their image as is.
+  const approveFor = (action: RequiredAction) => {
+    const projectId = action.preview?.creativeProjectId
+    return projectId ? (slug: string, id: string) => publishCreativePost(slug, id, projectId) : approvePublish
+  }
+  const retryFor = (action: RequiredAction) => (action.preview?.creativeProjectId ? approveFor(action) : retryPublish)
+
   const pendingApprovals = actions.filter(
     (a) => a.state === "awaiting_approval" && a.approvalId && (!statuses[a.approvalId] || statuses[a.approvalId]?.approvalStatus === "pending")
   )
   const approveAll = async () => {
     for (const action of pendingApprovals) {
-      await run(action.approvalId!, action.platform, approvePublish)
+      await run(action.approvalId!, action.platform, approveFor(action))
     }
   }
 
@@ -292,9 +380,9 @@ export function ActionCards({ actions, assets }: { actions: RequiredAction[]; as
             status={statuses[action.approvalId]}
             busy={Boolean(busy[action.approvalId])}
             canPublish={canPublish}
-            onApprove={() => void run(action.approvalId!, action.platform, approvePublish)}
+            onApprove={() => void run(action.approvalId!, action.platform, approveFor(action))}
             onReject={() => void run(action.approvalId!, action.platform, rejectPublish)}
-            onRetry={() => void run(action.approvalId!, action.platform, retryPublish)}
+            onRetry={() => void run(action.approvalId!, action.platform, retryFor(action))}
           />
         ) : (
           <NoticeCard key={`${action.actionType}-${action.platform}-${i}`} action={action} />

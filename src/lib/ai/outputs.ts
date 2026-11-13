@@ -24,6 +24,11 @@ export type TaskType = (typeof TASK_TYPES)[number]
 
 export const executionPlanSchema = z.object({
   intent: z.string().describe("One sentence restating what the user wants"),
+  requestBrief: z
+    .string()
+    .describe(
+      "Every specific thing the user asked for, kept in their words: product/service, offer or price, audience, key message, exact wording or CTA, links, tone, format/size, platforms, deadline, must-include and must-avoid. Short lines; omit what wasn't said; never invent."
+    ),
   taskType: z.enum(TASK_TYPES),
   steps: z
     .array(

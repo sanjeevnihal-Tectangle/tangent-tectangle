@@ -29,6 +29,16 @@ export interface PlannedStep {
   kind?: "agent" | "tool"
 }
 
+/** An editable Creative Studio design an agent built. */
+export interface GeneratedCreative {
+  stepId: string
+  projectId: string
+  name: string
+  formatId: string
+  width: number
+  height: number
+}
+
 /** An image an agent generated and saved to the Asset Library. */
 export interface GeneratedAsset {
   stepId: string
@@ -61,7 +71,7 @@ export interface RequiredAction {
   reason?: string
   approvalId?: string
   account?: { id: string; name: string }
-  preview?: { caption: string; imageAssetId: string | null }
+  preview?: { caption: string; imageAssetId: string | null; creativeProjectId?: string | null }
 }
 
 /** Newline-delimited JSON events streamed from /api/ai/command. */
@@ -81,6 +91,7 @@ export type RunEvent =
   | { type: "step.failed"; stepId: string; message: string }
   | { type: "tool.completed"; stepId: string }
   | { type: "asset.generated"; asset: GeneratedAsset }
+  | { type: "creative.created"; creative: GeneratedCreative }
   | { type: "validation"; checks: ValidationCheck[] }
   | { type: "action.required"; action: RequiredAction }
   | { type: "message.delta"; text: string }

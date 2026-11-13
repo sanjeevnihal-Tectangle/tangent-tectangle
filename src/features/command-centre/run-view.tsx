@@ -16,7 +16,7 @@ import { useState } from "react"
 
 import { Badge } from "@/components/ui/badge"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
-import { ActionCards, GeneratedImages } from "@/features/command-centre/action-cards"
+import { ActionCards, GeneratedImages, CreativeDesignPreview } from "@/features/command-centre/action-cards"
 import { AgentAvatar } from "@/features/command-centre/agent-avatar"
 import { AgentOutputView } from "@/features/command-centre/output-cards"
 import type { RunViewModel, StageState, StepState } from "@/features/command-centre/run-model"
@@ -137,7 +137,8 @@ export function RunView({ model }: { model: RunViewModel }) {
         const output = model.outputs[step.id]
         const state = model.stepState[step.id] ?? "pending"
         const stepAssets = model.assets.filter((a) => a.stepId === step.id)
-        if (!output && stepAssets.length === 0 && state !== "failed" && state !== "running") return null
+        const stepCreatives = model.creatives.filter((c) => c.stepId === step.id)
+        if (!output && stepAssets.length === 0 && stepCreatives.length === 0 && state !== "failed" && state !== "running") return null
         return (
           <motion.section
             key={step.id}
@@ -160,6 +161,15 @@ export function RunView({ model }: { model: RunViewModel }) {
             <div className="p-3">
               {output ? (
                 <AgentOutputView output={output} />
+              ) : stepCreatives.length ? (
+                <div className="flex flex-wrap gap-3">
+                  {stepCreatives.map((c) => (
+                    <div key={c.projectId} className="space-y-1">
+                      <CreativeDesignPreview projectId={c.projectId} width={240} />
+                      <p className="max-w-60 truncate text-xs text-muted-foreground">{c.name}</p>
+                    </div>
+                  ))}
+                </div>
               ) : stepAssets.length ? (
                 <GeneratedImages assets={stepAssets} />
               ) : state === "running" ? (

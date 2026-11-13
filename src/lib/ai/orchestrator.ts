@@ -3,7 +3,7 @@ import "server-only"
 import { ACTIVE_AGENT_IDS, AGENTS } from "@/lib/ai/agents/definitions"
 import { outputToText, runAgentTask, SHARED_RULES } from "@/lib/ai/agents/handlers"
 import { loadBusinessContext } from "@/lib/ai/context"
-import type { GeneratedAsset, PlannedStep, RequiredAction, RunEvent } from "@/lib/ai/events"
+import type { GeneratedAsset, GeneratedCreative, PlannedStep, RequiredAction, RunEvent } from "@/lib/ai/events"
 import type { ImageAspect, ImageProvider } from "@/lib/ai/image-provider"
 import { executionPlanSchema, type AgentOutput, type CopyOutput, type CreativeOutput, type ExecutionPlan } from "@/lib/ai/outputs"
 import { normalizePlan, type NormalizedStep } from "@/lib/ai/plan"
@@ -17,6 +17,8 @@ import {
   summarizeConnections,
   type PlatformConnection,
 } from "@/lib/integrations/connections"
+import { createAgentDesign, designComposeContext } from "@/lib/creative/agent-design"
+import { getFormat } from "@/lib/creative/formats"
 import { prepareExternalActions } from "@/lib/publishing/prepare"
 
 export interface OrchestratorInput {
@@ -26,6 +28,8 @@ export interface OrchestratorInput {
   history: StoredMessage[]
   message: string
   maxSteps: number
+  /** Business name fallback for designs when no business profile exists. */
+  workspaceName: string
   /** Image generator available to the Graphic Designer (null when not configured) and the plan quota check. */
   images: { provider: ImageProvider | null; quotaError: string | null }
   signal?: AbortSignal
@@ -40,6 +44,7 @@ export interface OrchestratorResult {
 
 const IMAGE_STEP_ID = "tool-image"
 const PUBLISH_STEP_ID = "tool-publish"
+const DESIGN_STEP_ID = "tool-design"
 
 const PLANNER_SYSTEM = `${SHARED_RULES}
 
@@ -50,10 +55,16 @@ ${ACTIVE_AGENT_IDS.map((id) => `- ${id}: ${AGENTS[id].summary}`).join("\n")}
 
 Tools Tangent runs for the agents (do not plan steps for these; they run automatically):
 - Image generation: when produceImage is true, the Graphic Designer's first concept is rendered into a real image and saved to the Asset Library.
+- Creative Studio: after the image, Tangent builds an editable Creative Studio design (layout, headline, CTA, brand colours and
+  logo over the image). That design is what gets published, and the user can edit it before approving.
 - Publishing: each publish_post in externalActions on a platform listed as connected and ready becomes an approval card.
   When the user approves it in the app, Tangent publishes it with the connected account and shows the post link.
 
 Planning rules:
+- Fill requestBrief with everything specific the user asked for (their words, product, offer, audience, CTA, link, tone,
+  format, platforms, must-include/avoid). Every agent receives it, so put the user's exact requirements there.
+- Write each step instruction so the agent delivers exactly what was asked (e.g. "Write one Instagram caption announcing
+  <product> for <audience> with CTA <cta>"), not a generic task.
 - Use the fewest steps that fully answer the request (usually 1–3). Order steps so later steps can build on earlier ones.
 - Read "Connected platforms": it is the live connection status for this workspace. Never say an account is not connected
   when it is listed as ready, and never say Tangent can't see the integrations.
@@ -122,6 +133,16 @@ function withToolSteps(steps: NormalizedStep[], plan: ExecutionPlan): (Normalize
       })
     }
   })
+  if (plan.produceImage && lastDesigner >= 0) {
+    // After every agent step, so the design uses the final copy as well as the image.
+    ordered.push({
+      id: DESIGN_STEP_ID,
+      agentId: "graphic_designer",
+      title: "Build the editable design in Creative Studio",
+      instruction: "",
+      kind: "tool",
+    })
+  }
   if (plan.externalActions.length > 0) {
     ordered.push({
       id: PUBLISH_STEP_ID,
@@ -161,6 +182,7 @@ export async function* runOrchestrator(
     validation: [],
     actions: [],
     assets: [],
+    creatives: [],
     toolSteps: {},
     limitations: [],
     error: null,
@@ -268,6 +290,8 @@ export async function* runOrchestrator(
     const produced: { output: AgentOutput; text: string; title: string }[] = []
     let failedSteps = 0
     let image: (GeneratedAsset & { mimeType: string }) | null = null
+    let creative: GeneratedCreative | null = null
+    const requestText = plan.requestBrief.trim() ? `${message}\n\nSpecifics the user asked for:\n${plan.requestBrief.trim()}` : message
     let imageIssue: string | null = plan.produceImage ? null : "No image was requested in the plan."
     const toolDone = (stepId: string) => {
       run.toolSteps![stepId] = { status: "done", error: null }
@@ -353,6 +377,76 @@ export async function* runOrchestrator(
         continue
       }
 
+      if (step.id === DESIGN_STEP_ID) {
+        // Tool: compose an editable Creative Studio design from the image, concept and copy.
+        if (!image) {
+          const issue = `No design was built because there is no image. ${imageIssue ?? ""}`.trim()
+          toolFailed(step.id, issue)
+          yield { type: "step.failed", stepId: step.id, message: issue }
+          continue
+        }
+        const targets = plan.externalActions.map((a) => canonicalProvider(a.platform))
+        const format = getFormat(targets.includes("instagram") || !targets.includes("facebook") ? "instagram_post" : "facebook_post")
+        const concept = (
+          [...produced].reverse().find((p) => p.output.kind === "creative")?.output as { kind: "creative"; data: CreativeOutput } | undefined
+        )?.data.concepts[0]
+        const variant = produced.flatMap((p) => (p.output.kind === "copy" ? (p.output.data as CopyOutput).variants : []))[0]
+        try {
+          const { ctx, brandProfileId } = await designComposeContext(repository, input.workspaceName, format, image.assetId)
+          const designed = await createAgentDesign({
+            provider,
+            repository,
+            format,
+            objective: "awareness",
+            request: requestText,
+            businessContext: context.text,
+            concept: concept
+              ? { name: concept.name, visualDirection: concept.visualDirection, imagePrompt: concept.imagePrompt, copyOverlay: concept.copyOverlay }
+              : null,
+            copy: variant ? { headline: variant.headline, body: variant.body, callToAction: variant.callToAction } : null,
+            compose: ctx,
+            brandProfileId,
+            signal,
+          })
+          usage = addUsage(usage, designed.usage)
+          modelsUsed.add(designed.model)
+          await repository.recordAudit({
+            action: "creative.created",
+            entityType: "creative_project",
+            entityId: designed.project.id,
+            summary: `Graphic Designer built "${designed.project.name}" in Creative Studio`,
+            actor: { type: "agent", id: "graphic_designer" },
+            metadata: { runId },
+          })
+          creative = {
+            stepId: step.id,
+            projectId: designed.project.id,
+            name: designed.project.name,
+            formatId: format.id,
+            width: format.width,
+            height: format.height,
+          }
+          run.creatives!.push(creative)
+          toolDone(step.id)
+          toolResults.push(
+            `Built the editable Creative Studio design "${designed.project.name}" (headline "${designed.spec.headline}"). It is the image that will be published; the user can edit it in Creative Studio before approving.`
+          )
+          yield { type: "creative.created", creative }
+          yield { type: "tool.completed", stepId: step.id }
+        } catch (error) {
+          if (signal?.aborted) throw error
+          const issue =
+            error instanceof ProviderError
+              ? `The Creative Studio design couldn't be built: ${error.message}. The post will use the generated image instead.`
+              : "The Creative Studio design couldn't be built. The post will use the generated image instead."
+          if (!(error instanceof ProviderError)) console.error("[tangent] design step failed", error)
+          toolFailed(step.id, issue)
+          toolResults.push(issue)
+          yield { type: "step.failed", stepId: step.id, message: issue }
+        }
+        continue
+      }
+
       if (step.id === PUBLISH_STEP_ID) {
         // Tool: turn requested external actions into approval requests on connected accounts.
         const checks = validateOutputs(produced, failedSteps, context.brand?.prohibitedMessaging ?? [])
@@ -362,6 +456,7 @@ export async function* runOrchestrator(
           connections,
           copies: produced.flatMap((p) => (p.output.kind === "copy" ? [p.output.data as CopyOutput] : [])),
           image,
+          creative: creative ? { projectId: creative.projectId } : null,
           imageIssue,
           validationIssue: prohibited ? `Brand check failed — ${prohibited.detail}` : null,
           title: plan.intent,
@@ -426,7 +521,7 @@ export async function* runOrchestrator(
           provider,
           step.agentId,
           {
-            userRequest: message,
+            userRequest: requestText,
             instruction: step.instruction,
             businessContext: agentContext,
             priorOutputs: produced.map((p) => `### ${p.title}\n${p.text}`).join("\n\n"),

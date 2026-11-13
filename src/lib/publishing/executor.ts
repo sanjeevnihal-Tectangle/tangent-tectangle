@@ -168,6 +168,12 @@ export async function approveAndPublish(input: {
     return status(request.status, { error: "This approval isn't a social post Tangent can publish automatically." })
   }
   const payload = parsed.data
+  if (payload.creativeProjectId && !payload.designRendered && (request.status === "pending" || request.status === "approved")) {
+    // The image here is only the design's background photo; the final design is rendered in the browser.
+    return status(request.status, {
+      error: "This post uses an editable Creative Studio design. Approve it from its card in the AI Command Centre so the final design is rendered and posted.",
+    })
+  }
 
   if (request.status === "pending") {
     await repository.decideApproval(approvalId, "approve", null, actorId)
