@@ -33,8 +33,10 @@ export const executionPlanSchema = z.object({
         instruction: z.string().describe("Detailed instruction for the agent"),
       })
     )
+    // No maxItems: provider structured-output modes don't all enforce it, so a
+    // longer plan would fail validation. normalizePlan trims to the step limit.
     .min(1)
-    .max(4),
+    .describe("1 to 4 steps"),
   externalActions: z
     .array(
       z.object({

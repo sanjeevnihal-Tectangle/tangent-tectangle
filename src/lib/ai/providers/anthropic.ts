@@ -38,7 +38,9 @@ function toProviderError(error: unknown): ProviderError {
     }
     return new ProviderError(message, kind, "anthropic", error)
   }
-  return new ProviderError("Unexpected error from Anthropic.", "unknown", "anthropic", error)
+  console.error("[tangent] unexpected Anthropic error", error)
+  const detail = error instanceof Error && error.message ? ` (${error.name}: ${error.message.replace(/\s+/g, " ").slice(0, 200)})` : ""
+  return new ProviderError(`Unexpected error from Anthropic${detail}.`, "unknown", "anthropic", error)
 }
 
 export function createAnthropicProvider(apiKey: string, models: Record<ModelTier, string>): ModelProvider {

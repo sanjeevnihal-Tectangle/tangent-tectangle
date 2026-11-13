@@ -227,7 +227,8 @@ export async function* runOrchestrator(
         .join("\n\n"),
       schema: executionPlanSchema,
       schemaName: "execution_plan",
-      maxOutputTokens: 2000,
+      // Reasoning models spend part of this budget thinking before they answer.
+      maxOutputTokens: 6000,
       signal,
     })
     usage = addUsage(usage, planResult.usage)

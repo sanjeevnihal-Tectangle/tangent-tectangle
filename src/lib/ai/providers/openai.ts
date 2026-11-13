@@ -38,7 +38,9 @@ export function toProviderError(error: unknown): ProviderError {
     }
     return new ProviderError(message, kind, "openai", error)
   }
-  return new ProviderError("Unexpected error from OpenAI.", "unknown", "openai", error)
+  console.error("[tangent] unexpected OpenAI error", error)
+  const detail = error instanceof Error && error.message ? ` (${error.name}: ${error.message.replace(/\s+/g, " ").slice(0, 200)})` : ""
+  return new ProviderError(`Unexpected error from OpenAI${detail}.`, "unknown", "openai", error)
 }
 
 export function createOpenAIProvider(apiKey: string, models: Record<ModelTier, string>): ModelProvider {
@@ -63,7 +65,19 @@ export function createOpenAIProvider(apiKey: string, models: Record<ModelTier, s
           { signal: request.signal }
         )
         if (response.output_parsed == null) {
-          throw new ProviderError("OpenAI did not return a valid structured response.", "invalid_response", "openai")
+          const refusal = response.output
+            .flatMap((item) => (item.type === "message" ? item.content : []))
+            .find((part) => part.type === "refusal")
+          const reason =
+            response.status === "incomplete"
+              ? response.incomplete_details?.reason === "max_output_tokens"
+                ? ` (${model} ran out of output tokens before finishing)`
+                : ` (response incomplete: ${response.incomplete_details?.reason ?? "unknown reason"})`
+              : refusal
+                ? " (the model refused the request)"
+                : ` (status: ${response.status ?? "unknown"})`
+          console.error("[tangent] OpenAI structured output missing", { model, status: response.status, incomplete: response.incomplete_details })
+          throw new ProviderError(`OpenAI did not return a valid structured response${reason}.`, "invalid_response", "openai")
         }
         return {
           data: request.schema.parse(response.output_parsed),
