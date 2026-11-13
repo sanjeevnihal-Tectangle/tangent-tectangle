@@ -71,7 +71,29 @@ function createMetaAdapter(
       if (!res.ok) {
         throw new IntegrationError(`Meta token exchange failed (${res.status})`, "provider_error")
       }
-      const data = (await res.json()) as { access_token?: string; expires_in?: number }
+      const shortLived = (await res.json()) as { access_token?: string; expires_in?: number }
+      if (!shortLived.access_token) {
+        throw new IntegrationError("Meta did not return an access token", "provider_error")
+      }
+
+      // The code exchange returns a short-lived (1–2 hour) user token. Swap it for a
+      // long-lived (~60 day) token so approved posts can still be published later;
+      // Page tokens derived from it don't expire.
+      let data: { access_token?: string; expires_in?: number } = shortLived
+      const longUrl = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/oauth/access_token`)
+      longUrl.searchParams.set("grant_type", "fb_exchange_token")
+      longUrl.searchParams.set("client_id", appId)
+      longUrl.searchParams.set("client_secret", appSecret)
+      longUrl.searchParams.set("fb_exchange_token", shortLived.access_token)
+      try {
+        const longRes = await fetch(longUrl)
+        if (longRes.ok) {
+          const longLived = (await longRes.json()) as { access_token?: string; expires_in?: number }
+          if (longLived.access_token) data = longLived
+        }
+      } catch {
+        // Keep the short-lived token; the account shows its expiry and can be reconnected.
+      }
       if (!data.access_token) {
         throw new IntegrationError("Meta did not return an access token", "provider_error")
       }

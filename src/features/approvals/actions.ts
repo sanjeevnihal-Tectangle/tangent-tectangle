@@ -4,6 +4,8 @@ import { z } from "zod"
 
 import { ApprovalError } from "@/lib/approvals/engine"
 import { APPROVAL_DECISIONS, type ApprovalView } from "@/lib/domain/approvals"
+import { approveAndPublish } from "@/lib/publishing/executor"
+import { socialPostPayloadSchema, type PublishStatus } from "@/lib/publishing/payload"
 import { resolveWorkspace } from "@/lib/workspace/server"
 
 const SPEND_ACTIONS = new Set(["launch_ad_campaign", "increase_budget", "change_targeting"])
@@ -16,7 +18,7 @@ const decisionSchema = z.object({
 })
 
 export type DecideApprovalResult =
-  | { ok: true; approval: ApprovalView }
+  | { ok: true; approval: ApprovalView; publish?: PublishStatus }
   | { ok: false; error: string }
 
 export async function decideApproval(input: z.input<typeof decisionSchema>): Promise<DecideApprovalResult> {
@@ -48,6 +50,15 @@ export async function decideApproval(input: z.input<typeof decisionSchema>): Pro
       actor: { type: "user", id: context.user.id },
       metadata: { version: target.version, note },
     })
+    // Agent-prepared social posts execute as soon as they are approved.
+    if (decision === "approve") {
+      const request = await repository.getApprovalRequest(approvalId)
+      if (request && socialPostPayloadSchema.safeParse(request.payload).success) {
+        const publish = await approveAndPublish({ repository, approvalId, actorId: context.user.id })
+        const refreshed = (await repository.listApprovals()).find((a) => a.id === approvalId) ?? approval
+        return { ok: true, approval: refreshed, publish }
+      }
+    }
     return { ok: true, approval }
   } catch (error) {
     if (error instanceof ApprovalError) return { ok: false, error: error.message }

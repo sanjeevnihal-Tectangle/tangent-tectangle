@@ -10,7 +10,7 @@ The frontend never calls provider APIs and never receives API keys, access token
 | OpenAI | AI | `OPENAI_API_KEY` | ✅ Used by agents (Responses API, structured outputs) |
 | Anthropic | AI | `ANTHROPIC_API_KEY` | ✅ Used by agents (Messages API, structured outputs); automatic failover with OpenAI |
 | Supabase | Platform | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ Auth, Postgres, Storage |
-| Instagram, Facebook Pages | Social | `META_APP_ID`, `META_APP_SECRET` | Phase 4 |
+| Instagram, Facebook Pages | Social | `META_APP_ID`, `META_APP_SECRET` | ✅ OAuth (long-lived token) + approval-gated publishing (`lib/integrations/meta-publisher.ts`) |
 | YouTube | Social | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Phase 4 |
 | Meta Ads | Advertising | Meta app | Phase 5 |
 | Google Ads | Advertising | Google OAuth + `GOOGLE_ADS_DEVELOPER_TOKEN` | Phase 5 |
@@ -52,6 +52,26 @@ adding an adapter and registering it — the core app, approval engine and UI ar
 - Tokens are decrypted only inside server jobs/handlers that need them.
 - Refresh happens proactively before `token_expires_at`; failures set status `needs_reauth` and notify owners.
 - Key rotation: new `key_version`, background re-encryption.
+
+## Agent publishing (live)
+
+```
+Command Centre run → approval_request (exact social_post payload + hash, no tokens)
+→ user presses Approve & publish (content.publish) → assertExecutable → approved→executing (compare-and-set)
+→ decrypt token from private.integration_credentials → Meta Graph API → executed|failed
+→ content_items (published|failed) + publishing_jobs (external_post_id / last_error) + audit log
+```
+
+- Instagram: `POST /{ig-user-id}/media` (public signed JPEG URL + caption) → poll `status_code` → `POST /{ig-user-id}/media_publish` → permalink.
+- Facebook Pages: Page token via `GET /{page-id}?fields=access_token`, then `POST /{page-id}/photos` (or `/feed` for text).
+- Meta errors keep Meta's message and map to `token_expired` (190), `permission_denied` (10/200–299), `rate_limited` (4/17/32/613).
+- OAuth now exchanges the short-lived code token for a ~60-day token. Accounts connected before this change may hold a
+  1–2 hour token: reconnect them once.
+- Accounts saved as `needs_reauth` only because insights scopes are missing can still publish when the publish scope
+  (`instagram_content_publish` / `pages_manage_posts`) was granted.
+- Requires `SUPABASE_SERVICE_ROLE_KEY` (execution states, vault reads and publishing jobs are service-role writes) and the
+  same `INTEGRATION_ENCRYPTION_KEY` that encrypted the tokens.
+- Scheduling, ad launches and spend are not executed yet (approval cards say so).
 
 ## Execution path (publishing / ads)
 

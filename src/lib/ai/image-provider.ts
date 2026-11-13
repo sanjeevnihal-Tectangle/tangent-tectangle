@@ -23,7 +23,7 @@ export function aspectFor(width: number, height: number): ImageAspect {
 
 export interface GeneratedImage {
   bytes: Uint8Array
-  mimeType: "image/png"
+  mimeType: "image/png" | "image/jpeg"
   width: number
   height: number
   provider: string
@@ -33,7 +33,8 @@ export interface GeneratedImage {
 export interface ImageProvider {
   readonly id: string
   readonly model: string
-  generate(input: { prompt: string; aspect: ImageAspect; signal?: AbortSignal }): Promise<GeneratedImage>
+  /** `format` defaults to PNG; use JPEG for Instagram, whose publishing API only accepts JPEG. */
+  generate(input: { prompt: string; aspect: ImageAspect; format?: "png" | "jpeg"; signal?: AbortSignal }): Promise<GeneratedImage>
 }
 
 function createOpenAIImageProvider(apiKey: string, model: string): ImageProvider {
@@ -41,16 +42,17 @@ function createOpenAIImageProvider(apiKey: string, model: string): ImageProvider
   return {
     id: "openai",
     model,
-    async generate({ prompt, aspect, signal }) {
+    async generate({ prompt, aspect, format = "png", signal }) {
       const { size, width, height } = SIZES[aspect]
       try {
         const response = await client.images.generate(
-          { model, prompt, size, n: 1, output_format: "png", quality: "medium" },
+          { model, prompt, size, n: 1, output_format: format, quality: "medium" },
           { signal }
         )
         const b64 = response.data?.[0]?.b64_json
         if (!b64) throw new ProviderError("The image model returned no image.", "invalid_response", "openai")
-        return { bytes: Uint8Array.from(Buffer.from(b64, "base64")), mimeType: "image/png", width, height, provider: "openai", model }
+        const mimeType = format === "jpeg" ? "image/jpeg" : "image/png"
+        return { bytes: Uint8Array.from(Buffer.from(b64, "base64")), mimeType, width, height, provider: "openai", model }
       } catch (error) {
         throw toProviderError(error)
       }

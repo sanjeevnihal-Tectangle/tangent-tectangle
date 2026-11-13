@@ -20,6 +20,10 @@ specialised task handlers that share the same business context, schemas, limits 
 | `lib/ai/validation.ts` | Post-generation checks: schema success, prohibited phrases, budget allocation sums |
 | `lib/ai/orchestrator.ts` | The run pipeline (async generator yielding `RunEvent`s) |
 | `lib/ai/events.ts` | Typed event union streamed to the client |
+| `lib/integrations/connections.ts` | Live connection status per platform (from `connected_accounts`, no tokens) → planner/agent context and approval targeting |
+| `lib/publishing/prepare.ts` | Turns requested external actions into approval-ready payloads on connected accounts, or explains why not |
+| `lib/publishing/executor.ts` | Approve → `assertExecutable` → claim (`approved→executing`) → decrypt token → Meta Graph API → record result |
+| `features/command-centre/action-cards.tsx` + `actions.ts` | Approval cards (Approve & publish / Reject / Retry) and generated-image previews |
 | `app/api/ai/command/route.ts` | Auth, permission (`ai.run`), entitlement check, conversation persistence, NDJSON streaming, run/usage/audit logging |
 
 ## Provider failover
@@ -48,23 +52,26 @@ blocks a request outright. Every run logs the models that actually answered (`ag
 ## Run pipeline
 
 ```
-understand → retrieve context → plan → execute steps → validate → surface actions → present
+understand → retrieve context (+ connections) → plan → execute agent + tool steps → validate → approval cards → present
 ```
 
-1. **Understand / plan** — the fast model returns an `ExecutionPlan` (intent, task type, 1–4 steps assigned only to *active* agents, requested external actions, limitations).
-2. **Retrieve context** — `loadBusinessContext` (sources are shown to the user).
+1. **Understand / plan** — the fast model returns an `ExecutionPlan` (intent, task type, 1–4 steps assigned only to *active* agents, requested external actions, `produceImage`, limitations).
+2. **Retrieve context** — `loadBusinessContext` plus the workspace's connected accounts (`summarizeConnections`), so the planner and every agent see which platforms are connected and ready (sources are shown to the user).
 3. **Normalise** — enforce `AI_MAX_STEPS_PER_RUN` and per-agent `maxCallsPerRun`; dropped steps become limitations.
 4. **Execute** — steps run sequentially; each receives the business context, the user request, its instruction and the text of earlier outputs (so the Designer can build on the Copywriter). A failed step is reported and the run continues.
 5. **Validate** — Zod parse (structured outputs), brand prohibited-phrase scan, budget sanity checks.
-6. **External actions** — never executed. Each requested action is emitted as `action.required` (currently always `connection_required` because no connectors exist; once connected it becomes an approval request).
-7. **Present** — the fast model streams a concise summary; detailed outputs render as typed cards.
+6. **Tool steps** (shown in the plan with the agent they belong to):
+   - *Generate image* (Graphic Designer, when `produceImage`): renders the designer's first concept with `getImageProvider()` as a JPEG (Instagram only accepts JPEG; square when Instagram is a target), saves it to the Asset Library (`source: ai_generated`), meters `image_generations_monthly`, emits `asset.generated`.
+   - *Prepare posts for approval* (Social Media Manager, when external actions were requested): `prepareExternalActions` picks the connected account, caption (copy variant for that platform) and image; brand-validation failures block it. Each ready post becomes an `approval_request` with the exact payload and an `action.required` event in state `awaiting_approval`. Otherwise the state is `connection_required`, `blocked` (with the reason) or `unsupported` (ads/spend, scheduling, platforms without a publisher).
+7. **Execute on approval** — nothing is posted during the run. The approval card's **Approve & publish** (or approving on the Approvals page) calls `approveAndPublish`, which requires `content.publish`, re-checks the payload hash, claims the request (`approved → executing`, compare-and-set so it can't run twice), decrypts the token server-side and publishes through the Meta Graph API. The card shows the post link/ID or Meta's error; failed posts can be retried as a new approval version.
+8. **Present** — the fast model streams a concise summary using the actual tool results; detailed outputs render as typed cards.
 
 Every run produces: an assistant message with the full run record, an `agent_runs` row with `agent_tasks`, a `usage_records` entry (AI credits = 1 per started 1,000 tokens) and an audit event.
 
 ## Streaming events
 
 `run.started`, `stage` (understanding/context/planning/executing/validating/presenting × active/done), `context`, `plan`,
-`step.started`, `step.completed` (typed output), `step.failed`, `validation`, `action.required`, `message.delta`,
+`step.started`, `step.completed` (typed output), `step.failed`, `tool.completed`, `asset.generated`, `validation`, `action.required`, `message.delta`,
 `run.completed` (usage, duration), `run.failed`. The client reduces them with `applyRunEvent` (pure, unit-tested) —
 users see meaningful progress, not a spinner.
 
@@ -94,7 +101,8 @@ users see meaningful progress, not a spinner.
 ## Safety rules (shared system prompt)
 
 - Use business/brand context; never use prohibited phrases.
-- Never claim to have published, scheduled, launched, sent or spent anything.
+- Never claim to have published, scheduled, launched, sent or spent anything (publishing happens only after approval).
+- Trust the connected-platform status in the context; never say Tangent can't see integrations.
 - Never invent metrics; label estimates.
 - Indian conventions by default (₹, lakh/crore, festivals, local platforms).
 

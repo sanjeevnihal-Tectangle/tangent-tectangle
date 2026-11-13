@@ -44,6 +44,9 @@ export const executionPlanSchema = z.object({
       })
     )
     .describe("External actions the user asked for (publishing, launching ads, spending). Never executed without approval."),
+  produceImage: z
+    .boolean()
+    .describe("True when the user wants an actual image/creative/post visual made. The Graphic Designer's first concept is then rendered by the image generator and saved to the Asset Library."),
   limitations: z
     .array(z.string())
     .describe("Parts of the request Tangent cannot fulfil yet, e.g. missing live data or unavailable agents"),

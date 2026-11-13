@@ -2,6 +2,8 @@ import { NextResponse } from "next/server"
 import { z } from "zod"
 
 import type { RunErrorCode, RunEvent } from "@/lib/ai/events"
+import { getImageProvider } from "@/lib/ai/image-provider"
+import { quotaError } from "@/lib/ai/metering"
 import { runOrchestrator, type OrchestratorResult } from "@/lib/ai/orchestrator"
 import { getModelProvider } from "@/lib/ai/provider"
 import {
@@ -90,6 +92,10 @@ export async function POST(request: Request) {
         history,
         message,
         maxSteps: serverEnv().AI_MAX_STEPS_PER_RUN,
+        images: {
+          provider: getImageProvider(),
+          quotaError: quotaError(context, "image_generations_monthly", 1),
+        },
         signal: request.signal,
       })
 

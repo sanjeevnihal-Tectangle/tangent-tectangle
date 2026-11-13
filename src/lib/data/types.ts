@@ -1,4 +1,4 @@
-import type { ExternalActionType, FinancialImpact } from "@/lib/approvals/engine"
+import type { ApprovalRequest, ApprovalStatus, ExternalActionType, FinancialImpact } from "@/lib/approvals/engine"
 import type { Role } from "@/lib/auth/permissions"
 import type { AdAccountView } from "@/lib/domain/ads"
 import type { AnalyticsEventRecord } from "@/lib/domain/analytics"
@@ -29,6 +29,23 @@ export interface SaveConnectedAccountInput {
   keyVersion?: number
   dailySpendLimitInr?: number | null
   monthlySpendLimitInr?: number | null
+}
+
+/** Encrypted token record from the credential vault. Decrypt only in server executors. */
+export interface ConnectedAccountCredential {
+  accessTokenCiphertext: string
+  refreshTokenCiphertext: string | null
+  keyVersion: number
+}
+
+/** Outcome of an approved publish, stored as a content item + publishing job. */
+export interface PublishingRecordInput {
+  approvalRequestId: string
+  connectedAccountId: string
+  contentItem: ContentItem
+  status: "succeeded" | "failed"
+  externalPostId: string | null
+  lastError: string | null
 }
 
 export interface NewApprovalRequestInput {
@@ -116,6 +133,15 @@ export interface WorkspaceRepository {
     actorId: string
   ): Promise<ApprovalView>
 
+  /** Full approval request (with the exact payload) for executors. */
+  getApprovalRequest(id: string): Promise<ApprovalRequest<Record<string, unknown>> | null>
+  /**
+   * Execution bookkeeping (approved → executing → executed | failed). Compare-and-set on
+   * `from`, so two clicks can never execute the same approval twice. Returns false when the
+   * status had already changed.
+   */
+  setApprovalExecutionStatus(id: string, from: ApprovalStatus, to: ApprovalStatus): Promise<boolean>
+
   listCampaigns(): Promise<Campaign[]>
   getCampaign(id: string): Promise<Campaign | null>
   saveCampaign(campaign: Campaign): Promise<Campaign>
@@ -124,7 +150,10 @@ export interface WorkspaceRepository {
   listConnectedAccounts(): Promise<ConnectedAccountView[]>
   saveConnectedAccount(input: SaveConnectedAccountInput): Promise<ConnectedAccountView>
   disconnectConnectedAccount(id: string): Promise<void>
+  /** Encrypted credentials for one connected account (server executors only). */
+  getConnectedAccountCredential(id: string): Promise<ConnectedAccountCredential | null>
   listPublishingJobs(): Promise<PublishingJobView[]>
+  recordPublishing(input: PublishingRecordInput): Promise<void>
 
   listAdAccounts(): Promise<AdAccountView[]>
   updateAdAccountLimits(

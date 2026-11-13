@@ -8,25 +8,21 @@ import {
   CircleDashed,
   Database,
   Loader2,
-  PlugZap,
   ShieldCheck,
+  Wrench,
   X,
 } from "lucide-react"
-import Link from "next/link"
 import { useState } from "react"
 
-import { useWorkspace } from "@/components/workspace/workspace-provider"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
+import { ActionCards, GeneratedImages } from "@/features/command-centre/action-cards"
 import { AgentAvatar } from "@/features/command-centre/agent-avatar"
 import { AgentOutputView } from "@/features/command-centre/output-cards"
 import type { RunViewModel, StageState, StepState } from "@/features/command-centre/run-model"
 import { SimpleMarkdown } from "@/features/command-centre/simple-markdown"
 import { AGENTS } from "@/lib/ai/agents/definitions"
 import { RUN_STAGE_LABELS, RUN_STAGES } from "@/lib/ai/events"
-import { EXTERNAL_ACTION_LABELS } from "@/lib/approvals/engine"
-import { workspaceHref } from "@/lib/navigation"
 import { cn } from "@/lib/utils"
 
 function StageIcon({ state }: { state: StageState | StepState }) {
@@ -113,6 +109,7 @@ function ExecutionProgress({ model }: { model: RunViewModel }) {
                       <StageIcon state={model.stepState[step.id] ?? "pending"} />
                       <span className="font-medium">{AGENTS[step.agentId].shortName}</span>
                       <span className="truncate text-muted-foreground">{step.title}</span>
+                      {step.kind === "tool" ? <Wrench className="size-3 shrink-0 text-muted-foreground" aria-label="Tool step" /> : null}
                     </li>
                   ))}
                 </ul>
@@ -126,8 +123,6 @@ function ExecutionProgress({ model }: { model: RunViewModel }) {
 }
 
 export function RunView({ model }: { model: RunViewModel }) {
-  const { workspace } = useWorkspace()
-
   return (
     <div className="space-y-3">
       <ExecutionProgress model={model} />
@@ -141,7 +136,8 @@ export function RunView({ model }: { model: RunViewModel }) {
       {model.steps.map((step) => {
         const output = model.outputs[step.id]
         const state = model.stepState[step.id] ?? "pending"
-        if (!output && state !== "failed" && state !== "running") return null
+        const stepAssets = model.assets.filter((a) => a.stepId === step.id)
+        if (!output && stepAssets.length === 0 && state !== "failed" && state !== "running") return null
         return (
           <motion.section
             key={step.id}
@@ -164,6 +160,8 @@ export function RunView({ model }: { model: RunViewModel }) {
             <div className="p-3">
               {output ? (
                 <AgentOutputView output={output} />
+              ) : stepAssets.length ? (
+                <GeneratedImages assets={stepAssets} />
               ) : state === "running" ? (
                 <p className="text-sm text-muted-foreground">Working on it…</p>
               ) : (
@@ -201,23 +199,7 @@ export function RunView({ model }: { model: RunViewModel }) {
         </ul>
       ) : null}
 
-      {model.actions.map((action, i) => (
-        <div key={i} className="flex flex-col gap-2 rounded-lg border border-info/30 bg-info-subtle/50 p-3 sm:flex-row sm:items-center">
-          <PlugZap className="size-4 shrink-0 text-info" />
-          <div className="flex-1 text-sm">
-            <p className="font-medium">
-              {EXTERNAL_ACTION_LABELS[action.actionType]} on {action.platform} — not executed
-            </p>
-            <p className="text-xs text-muted-foreground">
-              {action.description}. {action.platform} isn&apos;t connected. Once connected, this becomes an approval request and
-              runs only after you approve it.
-            </p>
-          </div>
-          <Button asChild size="sm" variant="outline">
-            <Link href={workspaceHref(workspace.slug, "integrations")}>Connect {action.platform}</Link>
-          </Button>
-        </div>
-      ))}
+      <ActionCards actions={model.actions} assets={model.assets} />
 
       {model.limitations.length ? (
         <div className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">

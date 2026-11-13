@@ -2,7 +2,7 @@ import "server-only"
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js"
 
-import { hashPayload, transition, type ApprovalRequest, type ApprovalStatus, type ExternalActionType, type FinancialImpact } from "@/lib/approvals/engine"
+import { ApprovalError, canTransition, hashPayload, transition, type ApprovalRequest, type ApprovalStatus, type ExternalActionType, type FinancialImpact } from "@/lib/approvals/engine"
 import type { Role } from "@/lib/auth/permissions"
 import type { AuditRecord, MemberView, WorkspaceRepository } from "@/lib/data/types"
 import type { AdAccountView } from "@/lib/domain/ads"
@@ -24,6 +24,7 @@ import type { ConnectedAccountView, ConnectionStatus, PublishingJobStatus, Publi
 import { publicEnv } from "@/lib/env/public"
 import { serverEnv } from "@/lib/env/server"
 import {
+  getLocalConnectedAccountCredential,
   listLocalAdAccounts,
   listLocalConnectedAccounts,
   removeLocalConnectedAccount,
@@ -274,6 +275,27 @@ export function createSupabaseRepository(
   userId: string
 ): WorkspaceRepository {
   const media = () => supabase.storage.from(MEDIA_BUCKET)
+
+  /**
+   * Service-role client for the few writes RLS reserves for the execution engine
+   * (approval execution states, publishing jobs, published content, the credential
+   * vault). Server-only; every query is still scoped to this workspace's organization id.
+   */
+  function adminClient(): SupabaseClient | null {
+    const env = serverEnv()
+    if (!publicEnv.NEXT_PUBLIC_SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) return null
+    return createClient(publicEnv.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    })
+  }
+
+  function requireAdmin(operation: string): SupabaseClient {
+    const admin = adminClient()
+    if (!admin) {
+      throw new RepositoryError(operation, { message: "SUPABASE_SERVICE_ROLE_KEY is not configured on the server" })
+    }
+    return admin
+  }
 
   async function signPaths(paths: string[]): Promise<Map<string, string>> {
     const unique = [...new Set(paths)]
@@ -658,6 +680,67 @@ export function createSupabaseRepository(
       return approvalFromRow(updated)
     },
 
+    async getApprovalRequest(id) {
+      const row = check(
+        "Load approval request",
+        await supabase
+          .from("approval_requests")
+          .select("id, version, previous_version_id, action_type, connected_account_id, payload, payload_hash, financial_impact, requested_by_agent, status, decided_by, decided_at, decision_note")
+          .eq("organization_id", organizationId)
+          .eq("id", id)
+          .maybeSingle()
+      ) as {
+        id: string
+        version: number
+        previous_version_id: string | null
+        action_type: ExternalActionType
+        connected_account_id: string | null
+        payload: Record<string, unknown>
+        payload_hash: string
+        financial_impact: FinancialImpact | null
+        requested_by_agent: string | null
+        status: ApprovalStatus
+        decided_by: string | null
+        decided_at: string | null
+        decision_note: string | null
+      } | null
+      if (!row) return null
+      return {
+        id: row.id,
+        version: row.version,
+        previousVersionId: row.previous_version_id,
+        actionType: row.action_type,
+        connectedAccountId: row.connected_account_id,
+        payload: row.payload,
+        payloadHash: row.payload_hash,
+        financialImpact: row.financial_impact,
+        requestedByAgent: row.requested_by_agent,
+        status: row.status,
+        decidedBy: row.decided_by,
+        decidedAt: row.decided_at,
+        decisionNote: row.decision_note,
+      }
+    },
+
+    async setApprovalExecutionStatus(id, from, to) {
+      if (!canTransition(from, to)) {
+        throw new ApprovalError(`Cannot move approval from "${from}" to "${to}"`, "invalid_transition")
+      }
+      // RLS only lets members set decision states; execution states belong to the engine.
+      const admin = requireAdmin("Update approval execution status")
+      const rows = check(
+        "Update approval execution status",
+        await admin
+          .from("approval_requests")
+          .update({ status: to })
+          .eq("organization_id", organizationId)
+          .eq("id", id)
+          .eq("status", from)
+          .select("id")
+      ) as { id: string }[]
+      return rows.length > 0
+    },
+
     async listCampaigns() {
       const rows = check(
         "List campaigns",
@@ -795,13 +878,22 @@ export function createSupabaseRepository(
 
         if (!accErr && row) {
           if (input.accessTokenCiphertext) {
-            await admin.schema("private").from("integration_credentials").upsert({
+            const { error: credError } = await admin.schema("private").from("integration_credentials").upsert({
               connected_account_id: row.id,
               access_token_ciphertext: input.accessTokenCiphertext,
               refresh_token_ciphertext: input.refreshTokenCiphertext ?? null,
               key_version: input.keyVersion ?? 1,
               updated_at: now,
             })
+            if (credError) {
+              // Without the stored token the account can't publish, so don't show it as healthy.
+              console.error("[tangent] storing integration credential failed:", credError.message)
+              await admin
+                .from("connected_accounts")
+                .update({ status: "error", last_error: "The access token could not be stored in the credential vault. Reconnect the account." })
+                .eq("organization_id", organizationId)
+                .eq("id", row.id)
+            }
           }
           if (input.provider === "meta_ads" || input.provider === "meta" || input.provider === "google_ads") {
             await admin.from("ad_accounts").upsert(
@@ -881,6 +973,80 @@ export function createSupabaseRepository(
           .eq("organization_id", organizationId)
           .eq("id", id)
       }
+    },
+
+    async getConnectedAccountCredential(id) {
+      const local = getLocalConnectedAccountCredential(organizationId, id)
+      if (local) return local
+      // Confirm the account belongs to this workspace (RLS) before reading the vault.
+      const owned = check(
+        "Load connected account",
+        await supabase.from("connected_accounts").select("id").eq("organization_id", organizationId).eq("id", id).maybeSingle()
+      ) as { id: string } | null
+      if (!owned) return null
+      const admin = requireAdmin("Load integration credential")
+      const row = check(
+        "Load integration credential",
+        await admin
+          .schema("private")
+          .from("integration_credentials")
+          .select("access_token_ciphertext, refresh_token_ciphertext, key_version")
+          .eq("connected_account_id", id)
+          .maybeSingle()
+      ) as { access_token_ciphertext: string; refresh_token_ciphertext: string | null; key_version: number } | null
+      if (!row) return null
+      return {
+        accessTokenCiphertext: row.access_token_ciphertext,
+        refreshTokenCiphertext: row.refresh_token_ciphertext,
+        keyVersion: Number(row.key_version),
+      }
+    },
+
+    async recordPublishing(input) {
+      // Published/failed content states are reserved for the publishing engine (service role).
+      const admin = requireAdmin("Record publishing result")
+      const item = input.contentItem
+      check(
+        "Save published content item",
+        await admin.from("content_items").upsert({
+          id: item.id,
+          organization_id: organizationId,
+          created_by: userId,
+          title: item.title,
+          platform: item.platform,
+          format: item.format,
+          caption: item.caption,
+          hashtags: item.hashtags,
+          scheduled_for: item.scheduledFor,
+          status: item.status,
+          creative_project_id: item.creativeProjectId,
+          media_asset_ids: item.mediaAssetIds,
+          review_note: item.reviewNote,
+          approval_request_id: input.approvalRequestId,
+        })
+      )
+      const { data: account } = await admin
+        .from("connected_accounts")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .eq("id", input.connectedAccountId)
+        .maybeSingle()
+      // Accounts kept only in the local integration store have no row to reference.
+      if (!account) return
+      check(
+        "Record publishing job",
+        await admin.from("publishing_jobs").insert({
+          organization_id: organizationId,
+          content_item_id: item.id,
+          connected_account_id: input.connectedAccountId,
+          approval_request_id: input.approvalRequestId,
+          status: input.status,
+          scheduled_for: new Date().toISOString(),
+          attempts: 1,
+          external_post_id: input.externalPostId,
+          last_error: input.lastError,
+        })
+      )
     },
 
     async listPublishingJobs() {

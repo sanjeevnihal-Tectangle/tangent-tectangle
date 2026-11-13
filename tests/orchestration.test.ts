@@ -28,6 +28,7 @@ describe("plan normalisation", () => {
       { agent: "graphic_designer", title: "D", instruction: "d" },
     ],
     externalActions: [],
+    produceImage: false,
     limitations: [],
   }
 
@@ -78,6 +79,34 @@ describe("run event reducer", () => {
     expect(model.stepState["step-1"]).toBe("done")
     expect(model.outputs["step-1"]).toEqual(copyOutput)
     expect(model.text).toBe("Hello world")
+  })
+
+  it("tracks tool steps, generated images and approval cards", () => {
+    const asset = { stepId: "tool-image", assetId: "a1", name: "Diwali", url: null, prompt: "p", width: 1024, height: 1024 }
+    const events: RunEvent[] = [
+      { type: "plan", intent: "Post", taskType: "content_creation", steps: [{ id: "tool-image", agentId: "graphic_designer", title: "Generate", kind: "tool" }], limitations: [] },
+      { type: "step.started", stepId: "tool-image" },
+      { type: "asset.generated", asset },
+      { type: "tool.completed", stepId: "tool-image" },
+      { type: "action.required", action: { actionType: "publish_post", platform: "Instagram", description: "Post", state: "awaiting_approval", approvalId: "ap1" } },
+    ]
+    const model = events.reduce(applyRunEvent, initialRunModel())
+    expect(model.stepState["tool-image"]).toBe("done")
+    expect(model.assets).toEqual([asset])
+    expect(model.actions[0]?.approvalId).toBe("ap1")
+
+    const restored = runModelFromRecord(
+      {
+        runId: "r", status: "completed", intent: "Post", taskType: "content_creation", contextSources: [], outputs: [], validation: [], limitations: [], error: null, durationMs: 1,
+        steps: [{ id: "tool-image", agentId: "graphic_designer", title: "Generate", kind: "tool" }],
+        actions: model.actions,
+        assets: [asset],
+        toolSteps: { "tool-image": { status: "done", error: null } },
+      },
+      ""
+    )
+    expect(restored.stepState["tool-image"]).toBe("done")
+    expect(restored.assets).toHaveLength(1)
   })
 
   it("marks the active stage as failed when the run fails", () => {

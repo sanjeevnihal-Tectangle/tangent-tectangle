@@ -1,4 +1,4 @@
-import { RUN_STAGES, type PlannedStep, type RequiredAction, type RunEvent, type RunStage, type ValidationCheck } from "@/lib/ai/events"
+import { RUN_STAGES, type GeneratedAsset, type PlannedStep, type RequiredAction, type RunEvent, type RunStage, type ValidationCheck } from "@/lib/ai/events"
 import type { AgentOutput, TaskType } from "@/lib/ai/outputs"
 import type { RunRecord } from "@/lib/domain/conversations"
 
@@ -18,6 +18,7 @@ export interface RunViewModel {
   contextSources: { label: string; detail: string }[]
   validation: ValidationCheck[]
   actions: RequiredAction[]
+  assets: GeneratedAsset[]
   limitations: string[]
   text: string
   error: { code: string; message: string } | null
@@ -41,6 +42,7 @@ export function initialRunModel(): RunViewModel {
     contextSources: [],
     validation: [],
     actions: [],
+    assets: [],
     limitations: [],
     text: "",
     error: null,
@@ -56,12 +58,17 @@ export function runModelFromRecord(record: RunRecord, text: string): RunViewMode
     intent: record.intent,
     taskType: record.taskType,
     steps: record.steps,
-    stepState: Object.fromEntries(record.steps.map((s) => [s.id, outputs[s.id] ? "done" : "failed"])),
+    stepState: Object.fromEntries(
+      record.steps.map((s) => [s.id, outputs[s.id] || record.toolSteps?.[s.id]?.status === "done" ? "done" : "failed"])
+    ),
     outputs,
-    stepErrors: {},
+    stepErrors: Object.fromEntries(
+      Object.entries(record.toolSteps ?? {}).flatMap(([id, t]) => (t.error ? [[id, t.error]] : []))
+    ),
     contextSources: record.contextSources,
     validation: record.validation,
     actions: record.actions,
+    assets: record.assets ?? [],
     limitations: record.limitations,
     text,
     error: record.error,
@@ -101,6 +108,10 @@ export function applyRunEvent(model: RunViewModel, event: RunEvent): RunViewMode
         stepState: { ...model.stepState, [event.stepId]: "failed" },
         stepErrors: { ...model.stepErrors, [event.stepId]: event.message },
       }
+    case "tool.completed":
+      return { ...model, stepState: { ...model.stepState, [event.stepId]: "done" } }
+    case "asset.generated":
+      return { ...model, assets: [...model.assets, event.asset] }
     case "validation":
       return { ...model, validation: event.checks }
     case "action.required":

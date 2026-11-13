@@ -3,7 +3,7 @@ import "server-only"
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import path from "node:path"
 
-import { hashPayload, transition, type ApprovalRequest } from "@/lib/approvals/engine"
+import { ApprovalError, canTransition, hashPayload, transition, type ApprovalRequest } from "@/lib/approvals/engine"
 import type { AgentRunLog, AuditEntry, AuditRecord, WorkspaceRepository } from "@/lib/data/types"
 import { decisionToStatus, type ApprovalView } from "@/lib/domain/approvals"
 import type { BrandProfile } from "@/lib/domain/brand"
@@ -20,6 +20,7 @@ import {
   DEMO_INTELLIGENCE,
 } from "@/lib/demo/seed-business"
 import {
+  getLocalConnectedAccountCredential,
   listLocalAdAccounts,
   listLocalConnectedAccounts,
   removeLocalConnectedAccount,
@@ -27,7 +28,11 @@ import {
   updateLocalAdAccountLimits,
 } from "@/lib/integrations/local-store"
 
-type StoredApproval = ApprovalView & { payload: Record<string, unknown>; payloadHash: string }
+type StoredApproval = ApprovalView & {
+  payload: Record<string, unknown>
+  payloadHash: string
+  connectedAccountId?: string | null
+}
 
 interface DemoStoreData {
   version: 1
@@ -224,6 +229,7 @@ export function createDemoRepository(): WorkspaceRepository {
           isSample: false,
           payload: input.payload,
           payloadHash,
+          connectedAccountId: input.connectedAccountId ?? null,
         }
         data.approvals.unshift(stored)
         return toView(stored)
@@ -261,6 +267,38 @@ export function createDemoRepository(): WorkspaceRepository {
         }
         data.approvals[index] = updated
         return toView(updated)
+      })
+    },
+
+    async getApprovalRequest(id) {
+      const stored = (await load()).approvals.find((a) => a.id === id)
+      if (!stored) return null
+      return {
+        id: stored.id,
+        version: stored.version,
+        previousVersionId: null,
+        actionType: stored.actionType,
+        connectedAccountId: stored.connectedAccountId ?? null,
+        payload: stored.payload,
+        payloadHash: stored.payloadHash,
+        financialImpact: stored.financialImpact,
+        requestedByAgent: stored.requestedByAgent,
+        status: stored.status,
+        decidedBy: null,
+        decidedAt: null,
+        decisionNote: stored.decisionNote,
+      }
+    },
+    async setApprovalExecutionStatus(id, from, to) {
+      if (!canTransition(from, to)) {
+        throw new ApprovalError(`Cannot move approval from "${from}" to "${to}"`, "invalid_transition")
+      }
+      return mutate((data) => {
+        const index = data.approvals.findIndex((a) => a.id === id)
+        const stored = data.approvals[index]
+        if (!stored || stored.status !== from) return false
+        data.approvals[index] = { ...stored, status: to }
+        return true
       })
     },
 
@@ -317,8 +355,17 @@ export function createDemoRepository(): WorkspaceRepository {
     async disconnectConnectedAccount(id) {
       removeLocalConnectedAccount("demo", id)
     },
+    async getConnectedAccountCredential(id) {
+      return getLocalConnectedAccountCredential("demo", id)
+    },
     async listPublishingJobs() {
       return []
+    },
+    async recordPublishing(input) {
+      await mutate((data) => {
+        const saved = { ...input.contentItem, updatedAt: new Date().toISOString() }
+        data.contentItems = [saved, ...(data.contentItems ?? []).filter((i) => i.id !== saved.id)]
+      })
     },
     async listAdAccounts() {
       return listLocalAdAccounts("demo")

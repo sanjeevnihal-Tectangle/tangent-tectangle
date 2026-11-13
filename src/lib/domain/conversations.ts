@@ -1,5 +1,6 @@
 import type { ActiveAgentId } from "@/lib/ai/agents/definitions"
 import type {
+  GeneratedAsset,
   PlannedStep,
   RequiredAction,
   ValidationCheck,
@@ -23,6 +24,10 @@ export interface RunRecord {
   outputs: { stepId: string; agentId: ActiveAgentId; title: string; output: AgentOutput }[]
   validation: ValidationCheck[]
   actions: RequiredAction[]
+  /** Images generated during the run (absent on runs recorded before image generation). */
+  assets?: GeneratedAsset[]
+  /** Outcome of tool steps, which have no agent output. */
+  toolSteps?: Record<string, { status: "done" | "failed"; error: string | null }>
   limitations: string[]
   error: { code: string; message: string } | null
   durationMs: number | null

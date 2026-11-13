@@ -3,14 +3,21 @@ import "server-only"
 import { ACTIVE_AGENT_IDS, AGENTS } from "@/lib/ai/agents/definitions"
 import { outputToText, runAgentTask, SHARED_RULES } from "@/lib/ai/agents/handlers"
 import { loadBusinessContext } from "@/lib/ai/context"
-import type { RequiredAction, RunEvent } from "@/lib/ai/events"
-import { executionPlanSchema } from "@/lib/ai/outputs"
-import { normalizePlan } from "@/lib/ai/plan"
+import type { GeneratedAsset, PlannedStep, RequiredAction, RunEvent } from "@/lib/ai/events"
+import type { ImageAspect, ImageProvider } from "@/lib/ai/image-provider"
+import { executionPlanSchema, type AgentOutput, type CopyOutput, type CreativeOutput, type ExecutionPlan } from "@/lib/ai/outputs"
+import { normalizePlan, type NormalizedStep } from "@/lib/ai/plan"
 import { ProviderError, type ModelProvider, type TokenUsage } from "@/lib/ai/provider"
 import { validateOutputs } from "@/lib/ai/validation"
-import { EXTERNAL_ACTION_LABELS } from "@/lib/approvals/engine"
 import type { AgentRunLog, WorkspaceRepository } from "@/lib/data/types"
 import type { RunRecord, StoredMessage } from "@/lib/domain/conversations"
+import {
+  canonicalProvider,
+  connectionsContextText,
+  summarizeConnections,
+  type PlatformConnection,
+} from "@/lib/integrations/connections"
+import { prepareExternalActions } from "@/lib/publishing/prepare"
 
 export interface OrchestratorInput {
   provider: ModelProvider
@@ -19,6 +26,8 @@ export interface OrchestratorInput {
   history: StoredMessage[]
   message: string
   maxSteps: number
+  /** Image generator available to the Graphic Designer (null when not configured) and the plan quota check. */
+  images: { provider: ImageProvider | null; quotaError: string | null }
   signal?: AbortSignal
 }
 
@@ -29,24 +38,42 @@ export interface OrchestratorResult {
   log: AgentRunLog
 }
 
+const IMAGE_STEP_ID = "tool-image"
+const PUBLISH_STEP_ID = "tool-publish"
+
 const PLANNER_SYSTEM = `${SHARED_RULES}
 
-You are the Tangent Orchestrator. Turn the user's request into an execution plan for specialist agents.
+You are the Tangent Orchestrator. Turn the user's request into an execution plan, split into steps, each assigned to the
+right specialist agent. Later steps receive earlier outputs.
 Available agents (only these can be assigned):
 ${ACTIVE_AGENT_IDS.map((id) => `- ${id}: ${AGENTS[id].summary}`).join("\n")}
 
+Tools Tangent runs for the agents (do not plan steps for these; they run automatically):
+- Image generation: when produceImage is true, the Graphic Designer's first concept is rendered into a real image and saved to the Asset Library.
+- Publishing: each publish_post in externalActions on a platform listed as connected and ready becomes an approval card.
+  When the user approves it in the app, Tangent publishes it with the connected account and shows the post link.
+
 Planning rules:
 - Use the fewest steps that fully answer the request (usually 1–3). Order steps so later steps can build on earlier ones.
-- Requests to publish, schedule, launch ads, change budgets/targeting, send messages or delete content are external actions:
-  list them in externalActions. They are never executed automatically; plan the drafts they need instead.
-- Put anything that needs unavailable capabilities (live analytics, competitor scraping, SEO crawling, video production,
-  publishing) in limitations, and plan the best draft-level help you can.`
+- Read "Connected platforms": it is the live connection status for this workspace. Never say an account is not connected
+  when it is listed as ready, and never say Tangent can't see the integrations.
+- When the user wants a social post, creative, poster or visual made, set produceImage to true and include a graphic_designer
+  step that produces ONE strong concept (the first concept is the one rendered).
+- When the user wants something posted or published, include a copywriter step that writes one caption variant per target
+  platform with the platform field set to exactly "Instagram", "Facebook", etc., and add one publish_post external action per
+  platform (platform = the platform name). Use schedule_post only when the user explicitly asks to schedule for later.
+- Launching ads, changing budgets/targeting and other spend are external actions that always need approval; plan drafts for them.
+- Put anything that needs capabilities Tangent lacks (live analytics, competitor scraping, SEO crawling, video production,
+  platforms that are not connected) in limitations, and plan the best help you can.`
 
 const PRESENTER_SYSTEM = `${SHARED_RULES}
 
 You are Tangent presenting the work of the marketing team to the user. Write a concise response (80–180 words):
 what was produced, the key recommendation, anything that needs attention (validation issues, limitations) and the next step.
-The detailed outputs are shown to the user as cards, so do not repeat them in full.
+The detailed outputs, generated images and approval cards are shown to the user below your message, so do not repeat them in full.
+Describe the status of images and publishing exactly as given under "Tool results": if a post is awaiting approval, tell the
+user to review it and press Approve & publish; never say it was published, and never tell the user to design the image
+themselves when an image was generated. Use the connected platform status as given; never claim Tangent can't see integrations.
 Plain text only: short paragraphs and "- " bullets; **bold** sparingly. No headings, no tables.`
 
 function historyText(history: StoredMessage[]): string {
@@ -63,10 +90,56 @@ function addUsage(total: TokenUsage, next: TokenUsage): TokenUsage {
   }
 }
 
+function connectionSourceDetail(connections: PlatformConnection[]): string {
+  if (connections.length === 0) return "No platforms connected"
+  return connections.map((c) => `${c.label} (${c.usable ? "ready" : "needs attention"})`).join(", ")
+}
+
+/** Instagram needs 4:5–1.91:1, so a planned Instagram post forces a square image. */
+function aspectForImage(concept: CreativeOutput["concepts"][number], plan: ExecutionPlan): ImageAspect {
+  if (plan.externalActions.some((a) => canonicalProvider(a.platform) === "instagram")) return "square"
+  const match = /(\d+(?:\.\d+)?)\s*[:x/]\s*(\d+(?:\.\d+)?)/.exec(concept.aspectRatio)
+  if (!match) return "square"
+  const ratio = Number(match[1]) / Number(match[2])
+  if (ratio > 1.15) return "landscape"
+  if (ratio < 0.87) return "portrait"
+  return "square"
+}
+
+/** Orders tool steps after the steps they depend on. */
+function withToolSteps(steps: NormalizedStep[], plan: ExecutionPlan): (NormalizedStep & { kind: "agent" | "tool" })[] {
+  const ordered: (NormalizedStep & { kind: "agent" | "tool" })[] = []
+  const lastDesigner = steps.map((s) => s.agentId).lastIndexOf("graphic_designer")
+  steps.forEach((step, index) => {
+    ordered.push({ ...step, kind: "agent" })
+    if (plan.produceImage && index === lastDesigner) {
+      ordered.push({
+        id: IMAGE_STEP_ID,
+        agentId: "graphic_designer",
+        title: "Generate the image and save it to the Asset Library",
+        instruction: "",
+        kind: "tool",
+      })
+    }
+  })
+  if (plan.externalActions.length > 0) {
+    ordered.push({
+      id: PUBLISH_STEP_ID,
+      agentId: "social_media_manager",
+      title: "Prepare posts on connected accounts for your approval",
+      instruction: "",
+      kind: "tool",
+    })
+  }
+  return ordered
+}
+
 /**
- * Runs one Command Centre request: understand → retrieve context → plan →
- * execute agent tasks → validate → present. External actions are surfaced for
- * approval and never executed here. Yields progress events as it goes.
+ * Runs one Command Centre request: understand → retrieve context (business,
+ * brand and live connection status) → plan → execute agent and tool steps →
+ * validate → prepare approvals → present. External actions become approval
+ * requests on connected accounts and are executed only when a human approves
+ * them (see lib/publishing/executor.ts). Yields progress events as it goes.
  */
 export async function* runOrchestrator(
   input: OrchestratorInput
@@ -87,12 +160,15 @@ export async function* runOrchestrator(
     outputs: [],
     validation: [],
     actions: [],
+    assets: [],
+    toolSteps: {},
     limitations: [],
     error: null,
     durationMs: null,
   }
   const tasks: AgentRunLog["tasks"] = []
   const modelsUsed = new Set<string>()
+  const toolResults: string[] = []
 
   const finish = (text: string): OrchestratorResult => {
     const completedAt = new Date()
@@ -125,8 +201,16 @@ export async function* runOrchestrator(
 
     yield { type: "stage", stage: "context", status: "active" }
     const context = await loadBusinessContext(repository)
-    run.contextSources = context.sources
-    yield { type: "context", sources: context.sources }
+    let connections: PlatformConnection[] = []
+    try {
+      connections = summarizeConnections(await repository.listConnectedAccounts())
+    } catch (error) {
+      console.error("[tangent] could not load connected accounts", error)
+    }
+    const connectionText = connectionsContextText(connections)
+    const agentContext = `${context.text}\n\n## Connected platforms\n${connectionText}`
+    run.contextSources = [...context.sources, { label: "Connected platforms", detail: connectionSourceDetail(connections) }]
+    yield { type: "context", sources: run.contextSources }
     yield { type: "stage", stage: "context", status: "done" }
 
     yield { type: "stage", stage: "planning", status: "active" }
@@ -135,7 +219,7 @@ export async function* runOrchestrator(
       system: PLANNER_SYSTEM,
       input: [
         `Today: ${today}`,
-        `## Business context\n${context.text}`,
+        `## Business context\n${agentContext}`,
         input.history.length ? `## Conversation so far\n${historyText(input.history)}` : null,
         `## New request\n${message}`,
       ]
@@ -149,23 +233,168 @@ export async function* runOrchestrator(
     usage = addUsage(usage, planResult.usage)
     modelsUsed.add(planResult.model)
     const plan = planResult.data
-    const { steps, dropped } = normalizePlan(plan, input.maxSteps)
+    const normalized = normalizePlan(plan, input.maxSteps)
+    const agentSteps = [...normalized.steps]
+    if (plan.produceImage && !agentSteps.some((s) => s.agentId === "graphic_designer")) {
+      if (agentSteps.length < input.maxSteps) {
+        agentSteps.push({
+          id: `step-${agentSteps.length + 1}`,
+          agentId: "graphic_designer",
+          title: "Design the post visual",
+          instruction: `Create one strong, on-brand concept with a generation-ready image prompt for: ${plan.intent}`,
+        })
+      } else {
+        normalized.dropped.push("Design the post visual")
+      }
+    }
+    const steps = withToolSteps(agentSteps, plan)
     run.intent = plan.intent
     run.taskType = plan.taskType
-    run.steps = steps.map(({ instruction: _instruction, ...step }) => step)
+    run.steps = steps.map(({ id, agentId, title, kind }): PlannedStep => (kind === "tool" ? { id, agentId, title, kind } : { id, agentId, title }))
     run.limitations = [
       ...plan.limitations,
-      ...dropped.map((title) => `Skipped "${title}" to stay within per-run agent limits.`),
+      ...normalized.dropped.map((title) => `Skipped "${title}" to stay within per-run agent limits.`),
     ]
     yield { type: "plan", intent: plan.intent, taskType: plan.taskType, steps: run.steps, limitations: run.limitations }
     yield { type: "stage", stage: "planning", status: "done" }
 
     yield { type: "stage", stage: "executing", status: "active" }
-    const produced: { output: (typeof run.outputs)[number]["output"]; text: string; title: string }[] = []
+    const produced: { output: AgentOutput; text: string; title: string }[] = []
     let failedSteps = 0
+    let image: (GeneratedAsset & { mimeType: string }) | null = null
+    let imageIssue: string | null = plan.produceImage ? null : "No image was requested in the plan."
+    const toolDone = (stepId: string) => {
+      run.toolSteps![stepId] = { status: "done", error: null }
+    }
+    const toolFailed = (stepId: string, error: string) => {
+      run.toolSteps![stepId] = { status: "failed", error }
+    }
+
     for (const [index, step] of steps.entries()) {
       signal?.throwIfAborted()
       yield { type: "step.started", stepId: step.id }
+
+      if (step.id === IMAGE_STEP_ID) {
+        // Tool: render the designer's first concept and save it to the Asset Library.
+        const concept = [...produced].reverse().find((p) => p.output.kind === "creative")?.output as
+          | { kind: "creative"; data: CreativeOutput }
+          | undefined
+        const first = concept?.data.concepts[0]
+        const reason = !input.images.provider
+          ? "Image generation isn't configured on the server (set IMAGE_PROVIDER=openai and an OpenAI API key with image credits)."
+          : input.images.quotaError
+            ? input.images.quotaError
+            : !first?.imagePrompt
+              ? "The Graphic Designer didn't produce an image prompt to render."
+              : null
+        if (reason || !input.images.provider || !first) {
+          imageIssue = reason ?? "Image generation is unavailable."
+          toolFailed(step.id, imageIssue)
+          toolResults.push(`Image generation failed: ${imageIssue}`)
+          yield { type: "step.failed", stepId: step.id, message: imageIssue }
+          continue
+        }
+        const prompt = `${first.imagePrompt}\n\nDo not render any text, letters, logos or watermarks in the image.`.slice(0, 2000)
+        try {
+          const generated = await input.images.provider.generate({ prompt, aspect: aspectForImage(first, plan), format: "jpeg", signal })
+          const asset = await repository.uploadAsset({
+            name: `${first.name || "AI creative"}`.slice(0, 60),
+            mimeType: generated.mimeType,
+            bytes: generated.bytes,
+            width: generated.width,
+            height: generated.height,
+            tags: ["ai-generated", "command-centre"],
+            source: "ai_generated",
+            generation: { provider: generated.provider, model: generated.model, prompt },
+          })
+          await repository.recordUsage("image_generations_monthly", 1, { model: generated.model, runId })
+          await repository.recordAudit({
+            action: "asset.generated",
+            entityType: "media_asset",
+            entityId: asset.id,
+            summary: `Graphic Designer generated "${asset.name}" in the Command Centre`,
+            actor: { type: "agent", id: "graphic_designer" },
+            metadata: { runId },
+          })
+          const ref: GeneratedAsset = {
+            stepId: step.id,
+            assetId: asset.id,
+            name: asset.name,
+            url: asset.url,
+            prompt,
+            width: asset.width,
+            height: asset.height,
+          }
+          image = { ...ref, mimeType: asset.mimeType }
+          run.assets!.push(ref)
+          toolDone(step.id)
+          toolResults.push(`Generated image "${asset.name}" and saved it to the Asset Library.`)
+          yield { type: "asset.generated", asset: ref }
+          yield { type: "tool.completed", stepId: step.id }
+        } catch (error) {
+          if (signal?.aborted) throw error
+          imageIssue =
+            error instanceof ProviderError
+              ? `Image generation failed: ${error.message}`
+              : error instanceof Error && /Supabase Storage|Upload file/.test(error.message)
+                ? `The image couldn't be saved to the Asset Library: ${error.message}`
+                : "Image generation failed."
+          if (!(error instanceof ProviderError)) console.error("[tangent] image generation failed", error)
+          toolFailed(step.id, imageIssue)
+          toolResults.push(imageIssue)
+          yield { type: "step.failed", stepId: step.id, message: imageIssue }
+        }
+        continue
+      }
+
+      if (step.id === PUBLISH_STEP_ID) {
+        // Tool: turn requested external actions into approval requests on connected accounts.
+        const checks = validateOutputs(produced, failedSteps, context.brand?.prohibitedMessaging ?? [])
+        const prohibited = checks.find((c) => c.label === "Prohibited messaging" && c.status === "fail")
+        const prepared = prepareExternalActions({
+          externalActions: plan.externalActions,
+          connections,
+          copies: produced.flatMap((p) => (p.output.kind === "copy" ? [p.output.data as CopyOutput] : [])),
+          image,
+          imageIssue,
+          validationIssue: prohibited ? `Brand check failed — ${prohibited.detail}` : null,
+          title: plan.intent,
+        })
+        for (const { action, payload } of prepared) {
+          let required: RequiredAction = action
+          if (payload) {
+            const request = {
+              actionType: action.actionType,
+              title: `${action.platform} post for ${payload.accountName}: ${payload.title}`.slice(0, 200),
+              payload: { ...payload },
+              requestedByAgent: "social_media_manager",
+            }
+            try {
+              let approval
+              try {
+                approval = await repository.createApprovalRequest({ ...request, connectedAccountId: payload.connectedAccountId })
+              } catch {
+                // Accounts held only in the local integration store have no database row to reference.
+                approval = await repository.createApprovalRequest(request)
+              }
+              required = { ...action, approvalId: approval.id }
+              toolResults.push(`${action.platform} post for ${payload.accountName} is ready and awaiting the user's approval (not published yet).`)
+            } catch (error) {
+              console.error("[tangent] could not create approval request", error)
+              required = { ...action, state: "blocked", reason: "The approval request could not be saved. Try again." }
+            }
+          }
+          if (required.state !== "awaiting_approval") {
+            toolResults.push(`${required.platform} — ${required.actionType}: ${required.state.replace("_", " ")}. ${required.reason ?? ""}`)
+          }
+          run.actions.push(required)
+          yield { type: "action.required", action: required }
+        }
+        toolDone(step.id)
+        yield { type: "tool.completed", stepId: step.id }
+        continue
+      }
+
       try {
         const result = await runAgentTask(
           provider,
@@ -173,7 +402,7 @@ export async function* runOrchestrator(
           {
             userRequest: message,
             instruction: step.instruction,
-            businessContext: context.text,
+            businessContext: agentContext,
             priorOutputs: produced.map((p) => `### ${p.title}\n${p.text}`).join("\n\n"),
             today,
           },
@@ -199,17 +428,6 @@ export async function* runOrchestrator(
     yield { type: "stage", stage: "validating", status: "active" }
     run.validation = validateOutputs(produced, failedSteps, context.brand?.prohibitedMessaging ?? [])
     yield { type: "validation", checks: run.validation }
-    for (const action of plan.externalActions) {
-      const required: RequiredAction = {
-        actionType: action.actionType,
-        platform: action.platform,
-        description: action.description || EXTERNAL_ACTION_LABELS[action.actionType],
-        // No provider connectors are live yet, so every external action is blocked on a connection.
-        state: "connection_required",
-      }
-      run.actions.push(required)
-      yield { type: "action.required", action: required }
-    }
     yield { type: "stage", stage: "validating", status: "done" }
 
     yield { type: "stage", stage: "presenting", status: "active" }
@@ -220,13 +438,12 @@ export async function* runOrchestrator(
       input: [
         `## User request\n${message}`,
         `## Plan\n${plan.intent}`,
+        `## Connected platforms\n${connectionText}`,
         produced.length
           ? `## Outputs\n${produced.map((p) => `### ${p.title}\n${p.text}`).join("\n\n")}`
           : "## Outputs\nNo outputs were produced.",
+        toolResults.length ? `## Tool results\n${toolResults.map((r) => `- ${r}`).join("\n")}` : null,
         `## Validation\n${run.validation.map((c) => `${c.label}: ${c.status} — ${c.detail}`).join("\n")}`,
-        run.actions.length
-          ? `## External actions requested (NOT executed; require a connected account and approval)\n${run.actions.map((a) => `${a.platform}: ${a.description}`).join("\n")}`
-          : null,
         run.limitations.length ? `## Limitations\n${run.limitations.join("\n")}` : null,
       ]
         .filter(Boolean)

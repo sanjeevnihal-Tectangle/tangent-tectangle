@@ -145,6 +145,19 @@ export function saveLocalConnectedAccount(
   return view
 }
 
+export function getLocalConnectedAccountCredential(
+  organizationId: string,
+  accountId: string
+): { accessTokenCiphertext: string; refreshTokenCiphertext: string | null; keyVersion: number } | null {
+  const stored = readStore().connectedAccounts.find((a) => a.organizationId === organizationId && a.id === accountId)
+  if (!stored?.accessTokenCiphertext) return null
+  return {
+    accessTokenCiphertext: stored.accessTokenCiphertext,
+    refreshTokenCiphertext: stored.refreshTokenCiphertext,
+    keyVersion: stored.keyVersion,
+  }
+}
+
 export function removeLocalConnectedAccount(organizationId: string, accountId: string): void {
   const store = readStore()
   store.connectedAccounts = store.connectedAccounts.filter(

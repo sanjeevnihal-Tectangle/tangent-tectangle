@@ -73,6 +73,11 @@ function ApprovalDialog({
       onDecided(result.approval)
       onOpenChange(false)
       setNote("")
+      if (result.publish) {
+        if (result.publish.error) toast.error(result.publish.error)
+        else toast.success(result.publish.permalink ? `Published: ${result.publish.permalink}` : "Approved and published.")
+        return
+      }
       toast.success(
         decision === "approve"
           ? approval.account?.connected
