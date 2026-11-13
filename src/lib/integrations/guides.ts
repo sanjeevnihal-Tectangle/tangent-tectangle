@@ -54,7 +54,7 @@ export const INTEGRATION_GUIDES: Record<string, IntegrationGuide> = {
     developerPortalUrl: "https://platform.openai.com/api-keys",
     estimatedMinutes: "2 min",
     summary:
-      "Connect OpenAI to run GPT reasoning models across your 11 AI marketing agents and generate brand images with gpt-image-1.",
+      "Connect OpenAI to run GPT reasoning models across your 11 AI marketing agents and generate brand images with gpt-image-2.6-sunburst.",
     steps: [
       {
         title: "Open the OpenAI API Keys dashboard",

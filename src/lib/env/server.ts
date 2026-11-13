@@ -21,7 +21,7 @@ const serverEnvSchema = z.object({
   AI_MAX_STEPS_PER_RUN: z.coerce.number().int().min(1).max(10).default(4),
 
   IMAGE_PROVIDER: z.enum(["none", "openai"]).default("none"),
-  IMAGE_MODEL: z.string().default("gpt-image-1"),
+  IMAGE_MODEL: z.string().default("gpt-image-2.6-sunburst"),
   VIDEO_PROVIDER: z.enum(["none"]).default("none"),
 
   INTEGRATION_ENCRYPTION_KEY: optionalSecret,
