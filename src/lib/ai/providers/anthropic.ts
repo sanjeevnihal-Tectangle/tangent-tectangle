@@ -59,7 +59,20 @@ export function createAnthropicProvider(apiKey: string, models: Record<ModelTier
             model,
             max_tokens: request.maxOutputTokens,
             system: request.system,
-            messages: [{ role: "user", content: request.input }],
+            messages: [
+              {
+                role: "user",
+                content: request.images?.length
+                  ? [
+                      ...request.images.map((image) => ({
+                        type: "image" as const,
+                        source: { type: "base64" as const, media_type: image.mimeType, data: image.data },
+                      })),
+                      { type: "text" as const, text: request.input },
+                    ]
+                  : request.input,
+              },
+            ],
             output_config: { format: zodOutputFormat(request.schema) },
           },
           { signal: request.signal }

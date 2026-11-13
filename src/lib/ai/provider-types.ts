@@ -7,10 +7,19 @@ export interface TokenUsage {
   outputTokens: number
 }
 
+/** An image sent to a vision-capable model alongside the text input. */
+export interface ModelImage {
+  mimeType: "image/png" | "image/jpeg" | "image/webp" | "image/gif"
+  /** Base64 data (no data: prefix). */
+  data: string
+}
+
 export interface StructuredRequest<TSchema extends z.ZodType> {
   tier: ModelTier
   system: string
   input: string
+  /** Optional images (logo, references) for vision models. */
+  images?: ModelImage[]
   schema: TSchema
   schemaName: string
   maxOutputTokens: number

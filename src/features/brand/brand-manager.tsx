@@ -1,6 +1,6 @@
 "use client"
 
-import { ImagePlus, Loader2, Plus, Save, Star, Trash2 } from "lucide-react"
+import { ImagePlus, Loader2, Plus, Save, Sparkles, Star, Trash2 } from "lucide-react"
 import { useState, useTransition, type ReactNode } from "react"
 import { toast } from "sonner"
 
@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { AssetPicker } from "@/features/assets/asset-picker"
 import { deleteBrandProfile, saveBrandProfile } from "@/features/brand/actions"
+import { BrandGenerator } from "@/features/brand/brand-generator"
 import { DESIGN_FONT_LABELS, DESIGN_FONTS, type DesignFont } from "@/lib/creative/document"
 import {
   BRAND_COLOR_ROLES,
@@ -382,6 +383,7 @@ export function BrandManager({ initial }: { initial: BrandProfile[] }) {
   const [draft, setDraft] = useState<BrandProfile | null>(() => initial.find((b) => b.id === selectedId) ?? null)
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [pending, startTransition] = useTransition()
+  const [generatorOpen, setGeneratorOpen] = useState(false)
 
   const saved = brands.find((b) => b.id === draft?.id)
   const dirty = draft ? JSON.stringify(draft) !== JSON.stringify(saved) : false
@@ -444,11 +446,27 @@ export function BrandManager({ initial }: { initial: BrandProfile[] }) {
         description="Brand profiles define how Tangent writes and designs. Every AI output uses the selected (default) profile."
         actions={
           canEdit ? (
-            <Button variant="outline" size="sm" onClick={create} disabled={pending}>
-              <Plus /> New brand profile
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button size="sm" variant="brand" onClick={() => setGeneratorOpen(true)} disabled={pending}>
+                <Sparkles /> Generate with AI
+              </Button>
+              <Button variant="outline" size="sm" onClick={create} disabled={pending}>
+                <Plus /> New brand profile
+              </Button>
+            </div>
           ) : null
         }
+      />
+
+      <BrandGenerator
+        open={generatorOpen}
+        onOpenChange={setGeneratorOpen}
+        current={draft}
+        onGenerated={(generated) => {
+          setSelectedId(generated.id)
+          setDraft(generated)
+          setErrors({})
+        }}
       />
 
       <div className="grid gap-4 lg:grid-cols-[16rem_1fr] xl:grid-cols-[16rem_1fr_20rem]">

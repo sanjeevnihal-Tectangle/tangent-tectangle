@@ -58,7 +58,21 @@ export function createOpenAIProvider(apiKey: string, models: Record<ModelTier, s
           {
             model,
             instructions: request.system,
-            input: request.input,
+            input: request.images?.length
+              ? [
+                  {
+                    role: "user" as const,
+                    content: [
+                      { type: "input_text" as const, text: request.input },
+                      ...request.images.map((image) => ({
+                        type: "input_image" as const,
+                        image_url: `data:${image.mimeType};base64,${image.data}`,
+                        detail: "auto" as const,
+                      })),
+                    ],
+                  },
+                ]
+              : request.input,
             max_output_tokens: request.maxOutputTokens,
             text: { format: zodTextFormat(request.schema, request.schemaName) },
           },
