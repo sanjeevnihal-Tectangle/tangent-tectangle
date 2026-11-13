@@ -5,11 +5,24 @@ import { IntegrationError } from "@/lib/integrations/gateway"
 /**
  * Publishing through the Meta Graph API (Instagram professional accounts and
  * Facebook Pages). Server-only: tokens are passed in by the executor after
- * decryption and are only ever sent to graph.facebook.com in request bodies.
+ * decryption and are only ever sent to graph.facebook.com / graph.instagram.com.
  */
 
 export const META_GRAPH_VERSION = "v21.0"
-const GRAPH = `https://graph.facebook.com/${META_GRAPH_VERSION}`
+const FACEBOOK_GRAPH = `https://graph.facebook.com/${META_GRAPH_VERSION}`
+const INSTAGRAM_GRAPH = `https://graph.instagram.com/${META_GRAPH_VERSION}`
+
+/**
+ * Tokens from "Instagram API with Instagram Login" (they start with "IG") only
+ * work against graph.instagram.com; Facebook user/Page tokens use graph.facebook.com.
+ */
+export function isInstagramLoginToken(accessToken: string): boolean {
+  return /^IG/.test(accessToken.trim())
+}
+
+function graphBaseFor(accessToken: string): string {
+  return isInstagramLoginToken(accessToken) ? INSTAGRAM_GRAPH : FACEBOOK_GRAPH
+}
 
 export type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
 
@@ -55,6 +68,7 @@ async function graphCall<T>(
   params: Record<string, string>,
   action: string
 ): Promise<T> {
+  const GRAPH = graphBaseFor(params.access_token ?? "")
   let res: Response
   try {
     if (method === "GET") {
@@ -95,17 +109,43 @@ export async function resolveInstagramUserId(input: {
   const handle = value.replace(/^@/, "").toLowerCase()
   const fetchImpl = input.fetchImpl ?? fetch
   type IgAccount = { id?: string; username?: string }
+
+  if (isInstagramLoginToken(input.accessToken)) {
+    // Instagram Login token: it belongs to exactly one professional account.
+    const me = await graphCall<{ user_id?: string; id?: string; username?: string }>(
+      fetchImpl,
+      "GET",
+      "me",
+      { fields: "user_id,username", access_token: input.accessToken },
+      "Finding the Instagram account"
+    )
+    const id = me.user_id ?? me.id
+    if (!id) throw new IntegrationError("Instagram did not return the account id for this token.", "provider_error")
+    if (me.username && me.username.toLowerCase() !== handle) {
+      throw new IntegrationError(
+        `This Instagram token belongs to @${me.username}, not @${handle}. Reconnect Instagram with a token for @${handle}.`,
+        "permission_denied"
+      )
+    }
+    return id
+  }
+
   const candidates: IgAccount[] = []
   try {
     // User token: every Page the user manages, with its linked Instagram account.
-    const pages = await graphCall<{ data?: { instagram_business_account?: IgAccount }[] }>(
+    const pages = await graphCall<{ data?: { instagram_business_account?: IgAccount; connected_instagram_account?: IgAccount }[] }>(
       fetchImpl,
       "GET",
       "me/accounts",
-      { fields: "instagram_business_account{id,username}", access_token: input.accessToken },
+      {
+        fields: "instagram_business_account{id,username},connected_instagram_account{id,username}",
+        access_token: input.accessToken,
+      },
       "Finding the Instagram account"
     )
-    for (const page of pages.data ?? []) if (page.instagram_business_account) candidates.push(page.instagram_business_account)
+    for (const page of pages.data ?? []) {
+      for (const ig of [page.instagram_business_account, page.connected_instagram_account]) if (ig) candidates.push(ig)
+    }
   } catch (error) {
     if (error instanceof IntegrationError && error.code === "token_expired") throw error
     // Page tokens can't list /me/accounts; fall through to the Page itself.
@@ -127,7 +167,7 @@ export async function resolveInstagramUserId(input: {
   const match = candidates.find((c) => c.username?.toLowerCase() === handle) ?? (candidates.length === 1 ? candidates[0] : undefined)
   if (!match?.id) {
     throw new IntegrationError(
-      `Could not find an Instagram professional account "@${handle}" linked to a Facebook Page for this token. Make sure @${handle} is a Business or Creator account linked to your Page, then reconnect Instagram with "Add / Connect" (OAuth).`,
+      `Could not find an Instagram professional account "@${handle}" linked to a Facebook Page for this token. Make sure @${handle} is a Business or Creator account linked to your Facebook Page, then reconnect Instagram with "Add / Connect" (OAuth). Alternatively, reconnect with an Instagram Login token (starts with "IG") generated for @${handle} in your Meta app's Instagram API settings.`,
       "permission_denied"
     )
   }

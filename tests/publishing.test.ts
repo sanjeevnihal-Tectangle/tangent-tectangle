@@ -179,6 +179,26 @@ describe("Meta Graph publishing", () => {
     await expect(resolveInstagramUserId({ idOrHandle: "17841400", accessToken: "t", fetchImpl })).resolves.toBe("17841400")
   })
 
+  it("uses graph.instagram.com for Instagram Login tokens", async () => {
+    const { fetchImpl, calls } = fakeGraph([
+      { user_id: "17841555", username: "tectangle_" },
+      { id: "c-1" },
+      { status_code: "FINISHED" },
+      { id: "m-1" },
+      { permalink: "https://instagram.com/p/x" },
+    ])
+    const igUserId = await resolveInstagramUserId({ idOrHandle: "tectangle_", accessToken: "IGAAtest", fetchImpl })
+    expect(igUserId).toBe("17841555")
+    await publishInstagramImage({ igUserId, accessToken: "IGAAtest", imageUrl: "https://img/x.jpg", caption: "Hi", fetchImpl, pollIntervalMs: 0 })
+    expect(calls.every((c) => c.url.startsWith("https://graph.instagram.com/"))).toBe(true)
+    expect(calls[1]!.url).toContain("/17841555/media")
+  })
+
+  it("rejects an Instagram Login token for a different account", async () => {
+    const { fetchImpl } = fakeGraph([{ user_id: "1", username: "someone_else" }])
+    await expect(resolveInstagramUserId({ idOrHandle: "tectangle_", accessToken: "IGAAtest", fetchImpl })).rejects.toThrow(/@someone_else/)
+  })
+
   it("explains when the handle isn't a linked professional account", async () => {
     const { fetchImpl } = fakeGraph([{ data: [] }, {}])
     await expect(resolveInstagramUserId({ idOrHandle: "tectangle_", accessToken: "t", fetchImpl })).rejects.toThrow(/Business or Creator/)
