@@ -1,7 +1,7 @@
 import { z } from "zod"
 
 import { designDocumentSchema, type DesignDocument } from "@/lib/creative/document"
-import { designSpecSchema } from "@/lib/creative/layout"
+import { storedDesignSpecSchema } from "@/lib/creative/layout"
 
 export const creativeBriefSchema = z.object({
   objective: z.string().max(60),
@@ -9,7 +9,7 @@ export const creativeBriefSchema = z.object({
   concept: z
     .object({ name: z.string(), visualDirection: z.string(), imagePrompt: z.string() })
     .nullable(),
-  spec: designSpecSchema.nullable(),
+  spec: storedDesignSpecSchema.nullable(),
   templateId: z.string().nullable(),
 })
 export type CreativeBrief = z.infer<typeof creativeBriefSchema>

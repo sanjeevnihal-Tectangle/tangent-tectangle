@@ -144,6 +144,18 @@ describe("preparing external actions", () => {
     expect(prepared[0]!.action.preview?.creativeProjectId).toBe("proj-1")
   })
 
+  it("lets a purely graphic design publish to Instagram without a photo", () => {
+    const prepared = prepareExternalActions({
+      ...base,
+      image: null,
+      imageIssue: null,
+      creative: { projectId: "proj-2" },
+      externalActions: [{ actionType: "publish_post", platform: "Instagram", description: "" }],
+    })
+    expect(prepared[0]!.action.state).toBe("awaiting_approval")
+    expect(prepared[0]!.payload).toMatchObject({ imageAssetId: null, creativeProjectId: "proj-2", designRendered: false })
+  })
+
   it("blocks publishing when brand validation failed", () => {
     const prepared = prepareExternalActions({ ...base, validationIssue: "Brand check failed", externalActions: [{ actionType: "publish_post", platform: "Facebook", description: "" }] })
     expect(prepared[0]!.action).toMatchObject({ state: "blocked", reason: "Brand check failed" })

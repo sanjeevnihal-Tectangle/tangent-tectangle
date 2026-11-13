@@ -15,6 +15,6 @@ export function composeContext(
   context: WorkspaceContext,
   format: CreativeFormat,
   imageAssetId: string | null
-): Promise<{ ctx: ComposeContext; brandProfileId: string | null }> {
+): Promise<{ ctx: ComposeContext; brandProfileId: string | null; brandStyleText: string }> {
   return designComposeContext(repository, context.workspace.name, format, imageAssetId)
 }

@@ -175,6 +175,11 @@
   *::before,
   *::after {
     @apply border-border outline-ring/50;
+  }
+  /* The app UI is square-cornered; designs keep their own corner radii (rounded CTAs, circles, image cards). */
+  *:not([data-design-page], [data-design-page] *),
+  *:not([data-design-page], [data-design-page] *)::before,
+  *:not([data-design-page], [data-design-page] *)::after {
     border-radius: 0px !important;
   }
   body {

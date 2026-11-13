@@ -1,18 +1,32 @@
 import { z } from "zod"
 
+import { DESIGN_ICONS } from "@/lib/creative/icons"
 import {
   newId,
+  PATTERN_KINDS,
   type Background,
   type DesignDocument,
   type DesignPage,
+  type DesignFont,
+  type IconLayer,
   type ImageLayer,
   type Layer,
+  type PatternLayer,
   type ShapeLayer,
   type TextLayer,
 } from "@/lib/creative/document"
 import type { CreativeFormat } from "@/lib/creative/formats"
 
-export const DESIGN_LAYOUTS = ["centered_hero", "bottom_band", "split", "top_headline", "bold_type", "corner_minimal"] as const
+export const DESIGN_LAYOUTS = [
+  "centered_hero",
+  "bottom_band",
+  "split",
+  "top_headline",
+  "bold_type",
+  "corner_minimal",
+  "feature_list",
+  "showcase",
+] as const
 export type DesignLayout = (typeof DESIGN_LAYOUTS)[number]
 
 export const LAYOUT_LABELS: Record<DesignLayout, string> = {
@@ -22,7 +36,12 @@ export const LAYOUT_LABELS: Record<DesignLayout, string> = {
   top_headline: "Top headline",
   bold_type: "Bold type",
   corner_minimal: "Minimal",
+  feature_list: "Features with icons",
+  showcase: "Product showcase",
 }
+
+export const DESIGN_DECORATIONS = ["none", "blobs", "circles", "lines", "frame"] as const
+export const IMAGE_TREATMENTS = ["full_bleed", "framed", "none"] as const
 
 /**
  * What the AI (or a template) decides: copy, layout, palette and background.
@@ -40,13 +59,45 @@ export const designSpecSchema = z.object({
     text: z.string().describe("Hex colour with strong contrast against background"),
     accent: z.string().describe("Hex colour from the brand palette for CTA and highlights"),
   }),
-  backgroundStyle: z.enum(["solid", "gradient", "image"]),
+  backgroundStyle: z.enum(["solid", "gradient", "image", "pattern"]),
   imagePrompt: z.string().describe("Generation-ready prompt for a background photo; no text in the image"),
   slides: z
     .array(z.object({ headline: z.string(), body: z.string() }))
     .describe("Carousel slides after the cover (3-6 for carousels, empty otherwise)"),
+  features: z
+    .array(z.object({ icon: z.enum(DESIGN_ICONS), label: z.string().describe("2-5 words") }))
+    .describe("0-4 benefit or feature callouts, each with a fitting icon; empty when the design doesn't need them"),
+  pattern: z.enum([...PATTERN_KINDS, "none"]).describe("Subtle background pattern from the brand's patterns, or none"),
+  decoration: z.enum(DESIGN_DECORATIONS).describe("Graphic accents around the edges: organic blobs, circles, line accents, an inset frame, or none"),
+  imageTreatment: z.enum(IMAGE_TREATMENTS).describe("full_bleed = photo fills the background; framed = image in a rounded card; none = no image"),
 })
 export type DesignSpec = z.infer<typeof designSpecSchema>
+
+/** Lenient variant for specs saved before features/patterns/decorations existed. */
+export const storedDesignSpecSchema = designSpecSchema.extend({
+  backgroundStyle: z.enum(["solid", "gradient", "image", "pattern"]),
+  features: designSpecSchema.shape.features.default([]),
+  pattern: designSpecSchema.shape.pattern.default("none"),
+  decoration: designSpecSchema.shape.decoration.default("none"),
+  imageTreatment: designSpecSchema.shape.imageTreatment.default("full_bleed"),
+})
+
+/** Spec fields added for graphic designs; templates and blanks may leave them out. */
+export const SPEC_GRAPHIC_DEFAULTS: Pick<DesignSpec, "features" | "pattern" | "decoration" | "imageTreatment"> = {
+  features: [],
+  pattern: "none",
+  decoration: "none",
+  imageTreatment: "full_bleed",
+}
+
+export interface DesignStyle {
+  headingFont: DesignFont
+  bodyFont: DesignFont
+  iconVariant: IconLayer["variant"]
+  cornerStyle: "rounded" | "sharp" | "pill"
+}
+
+export const DEFAULT_DESIGN_STYLE: DesignStyle = { headingFont: "heading", bodyFont: "body", iconVariant: "outline", cornerStyle: "rounded" }
 
 export interface ComposeContext {
   format: CreativeFormat
@@ -55,6 +106,8 @@ export interface ComposeContext {
   logoAssetId: string | null
   /** Background/hero photo to use when the spec asks for an image. */
   imageAssetId: string | null
+  /** Brand visual style (fonts, icons, corners); defaults when absent. */
+  style?: DesignStyle
 }
 
 const HEX = /^#[0-9a-fA-F]{6}$/
@@ -89,15 +142,34 @@ export function resolvePalette(spec: DesignSpec["palette"], brandColors: Compose
   const accentCandidate = HEX.test(spec.accent) ? spec.accent.toUpperCase() : byRole("primary") ?? byRole("accent") ?? "#E4572E"
   const accent = contrastRatio(background, accentCandidate) < 1.6 ? shade(accentCandidate, -0.35) : accentCandidate
   const text = readableOn(background, HEX.test(spec.text) ? spec.text.toUpperCase() : "#111111")
-  return { background, text, accent, onAccent: readableOn(accent, "#FFFFFF") }
+  const secondaryCandidate = byRole("secondary") ?? shade(accent, luminance(accent) > 0.4 ? -0.3 : 0.45)
+  const secondary = contrastRatio(background, secondaryCandidate) < 1.3 ? shade(secondaryCandidate, -0.3) : secondaryCandidate
+  return { background, text, accent, onAccent: readableOn(accent, "#FFFFFF"), secondary, soft: mix(accent, background, 0.82) }
+}
+
+function mix(a: string, b: string, t: number): string {
+  const ch = (h: string, i: number) => parseInt(h.slice(i, i + 2), 16)
+  const v = (i: number) => Math.round(ch(a, i) * (1 - t) + ch(b, i) * t)
+  return `#${[v(1), v(3), v(5)].map((n) => n.toString(16).padStart(2, "0")).join("")}`.toUpperCase()
 }
 
 function base(name: string, x: number, y: number, width: number, height: number) {
   return { id: newId("layer"), name, x, y, width, height, rotation: 0, opacity: 1, locked: false, hidden: false }
 }
 
-function estimateTextHeight(text: string, fontSize: number, width: number, lineHeight: number, padding: number): number {
-  const charsPerLine = Math.max(1, Math.floor((width - padding * 2) / (fontSize * 0.52)))
+/** Average glyph width per font, as a fraction of the font size (bold and uppercase run wider). */
+const GLYPH_WIDTH: Record<DesignFont, number> = { heading: 0.56, body: 0.54, serif: 0.55, display: 0.62, condensed: 0.42 }
+
+/** Brand style for the document being composed (composeDocument is synchronous). */
+let activeStyle: DesignStyle | null = null
+
+function brandFont(font: DesignFont): DesignFont {
+  const style = activeStyle ?? DEFAULT_DESIGN_STYLE
+  return font === "heading" ? style.headingFont : font === "body" ? style.bodyFont : font
+}
+
+function estimateTextHeight(text: string, fontSize: number, width: number, lineHeight: number, padding: number, glyph = 0.54): number {
+  const charsPerLine = Math.max(1, Math.floor((width - padding * 2) / (fontSize * glyph * 1.06)))
   const lines = text.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / charsPerLine)), 0)
   return Math.ceil(lines * fontSize * lineHeight + padding * 2)
 }
@@ -109,12 +181,14 @@ function text(
 ): TextLayer {
   const lineHeight = opts.lineHeight ?? 1.15
   const padding = opts.padding ?? 0
-  const height = opts.height ?? estimateTextHeight(value, opts.fontSize, opts.width, lineHeight, padding)
+  const font = brandFont(opts.font ?? "heading")
+  const glyph = GLYPH_WIDTH[font] * ((opts.fontWeight ?? 700) >= 700 ? 1.05 : 1) * (opts.uppercase ? 1.12 : 1)
+  const height = opts.height ?? estimateTextHeight(value, opts.fontSize, opts.width, lineHeight, padding, glyph)
   return {
     ...base(name, opts.x, opts.y, opts.width, height),
     type: "text",
     text: value,
-    font: opts.font ?? "heading",
+    font,
     fontSize: opts.fontSize,
     fontWeight: opts.fontWeight ?? 700,
     color: opts.color,
@@ -136,8 +210,84 @@ function image(name: string, assetId: string, x: number, y: number, width: numbe
   return { ...base(name, x, y, width, height), type: "image", assetId, fit: "cover", radius: 0, ...extra }
 }
 
+
+function icon(name: string, glyph: DesignSpec["features"][number]["icon"], x: number, y: number, size: number, color: string, chip: string | null, variant: IconLayer["variant"]): IconLayer {
+  return {
+    ...base(name, x, y, size, size),
+    type: "icon",
+    icon: glyph,
+    color,
+    variant,
+    strokeWidth: 2,
+    background: chip,
+    padding: chip ? Math.round(size * 0.24) : 0,
+    radius: Math.round(size * 0.3),
+  }
+}
+
+function pattern(kind: PatternLayer["pattern"], x: number, y: number, width: number, height: number, color: string, opacity: number, scale: number): PatternLayer {
+  return { ...base("Pattern", x, y, width, height), type: "pattern", pattern: kind, color, scale, radius: 0, opacity }
+}
+
+/** Edge accents drawn behind the content (never over the text column). */
+function decorations(spec: DesignSpec, W: number, H: number, palette: ReturnType<typeof resolvePalette>, onImage: boolean): Layer[] {
+  const unit = Math.min(W, H)
+  if (W / H > 2.2) return []
+  switch (onImage ? (spec.decoration === "lines" || spec.decoration === "frame" ? spec.decoration : "none") : spec.decoration) {
+    case "blobs":
+      return [
+        { ...shape("Blob", W - unit * 0.34, -unit * 0.16, unit * 0.52, unit * 0.48, palette.accent, { shape: "blob" }), opacity: 0.16 },
+        { ...shape("Blob", -unit * 0.18, H - unit * 0.3, unit * 0.46, unit * 0.42, palette.secondary, { shape: "blob" }), opacity: 0.14 },
+      ]
+    case "circles":
+      return [
+        { ...shape("Circle", W - unit * 0.26, -unit * 0.12, unit * 0.4, unit * 0.4, palette.accent, { shape: "ellipse" }), opacity: 0.14 },
+        { ...shape("Circle", W - unit * 0.12, unit * 0.16, unit * 0.16, unit * 0.16, palette.secondary, { shape: "ellipse" }), opacity: 0.2 },
+        { ...shape("Circle", -unit * 0.1, H - unit * 0.18, unit * 0.26, unit * 0.26, palette.accent, { shape: "ellipse" }), opacity: 0.12 },
+      ]
+    case "lines": {
+      const t = Math.max(3, Math.round(unit * 0.008))
+      return [
+        shape("Accent line", unit * 0.07, unit * 0.045, unit * 0.12, t, palette.accent),
+        shape("Accent line", W - unit * 0.07 - unit * 0.2, H - unit * 0.035, unit * 0.2, t, palette.accent),
+      ]
+    }
+    case "frame": {
+      const t = Math.max(3, Math.round(unit * 0.007))
+      const i = Math.round(unit * 0.03)
+      const c = onImage ? "#FFFFFF" : palette.accent
+      return [
+        shape("Frame", i, i, W - i * 2, t, c),
+        shape("Frame", i, H - i - t, W - i * 2, t, c),
+        shape("Frame", i, i, t, H - i * 2, c),
+        shape("Frame", W - i - t, i, t, H - i * 2, c),
+      ]
+    }
+    case "none":
+      return []
+    default: {
+      const unreachable: never = spec.decoration as never
+      return unreachable
+    }
+  }
+}
+
+/** Applies the brand's fonts and corner style to the generated layers. */
+function applyStyle(layers: Layer[], style: DesignStyle, unit: number): Layer[] {
+  const corner = (r: number) => (style.cornerStyle === "sharp" ? 0 : style.cornerStyle === "pill" ? Math.max(r, unit) : r)
+  return layers.map((layer) => {
+    if (layer.type === "text") return { ...layer, radius: layer.background ? corner(layer.radius) : layer.radius }
+    if (layer.type === "icon") return { ...layer, variant: style.iconVariant, radius: style.cornerStyle === "pill" ? layer.width : style.cornerStyle === "sharp" ? 0 : layer.radius }
+    if (layer.type === "image" && layer.name !== "Logo" && layer.radius > 0) return { ...layer, radius: style.cornerStyle === "sharp" ? 0 : layer.radius }
+    return layer
+  })
+}
+
 function backgroundFor(spec: DesignSpec, palette: ReturnType<typeof resolvePalette>, imageAssetId: string | null): Background {
-  if (spec.backgroundStyle === "image" && imageAssetId) {
+  // Layouts without an image card show a "framed" image full-bleed rather than dropping it.
+  const framedInLayout = spec.imageTreatment === "framed" && (spec.layout === "feature_list" || spec.layout === "showcase")
+  const wantsImage = spec.backgroundStyle === "image" || (spec.imageTreatment === "framed" && !framedInLayout && spec.layout !== "split")
+  if (wantsImage && imageAssetId && spec.imageTreatment !== "none" && !framedInLayout) {
     return { type: "image", assetId: imageAssetId, fallback: palette.background, overlayColor: "#000000", overlayOpacity: 0.35 }
   }
   if (spec.backgroundStyle === "gradient") {
@@ -153,6 +303,7 @@ function coverLayers(spec: DesignSpec, ctx: ComposeContext, palette: ReturnType<
   const wide = W / H > 2.2
   const m = Math.round(unit * (wide ? 0.12 : 0.07))
   const ink = onImage ? "#FFFFFF" : palette.text
+  const style = ctx.style ?? DEFAULT_DESIGN_STYLE
   const layers: Layer[] = []
 
   const headlineSize = Math.round(unit * (wide ? 0.32 : W / H > 1.2 ? 0.1 : 0.09))
@@ -290,7 +441,17 @@ function coverLayers(spec: DesignSpec, ctx: ComposeContext, palette: ReturnType<
         layers.push(sub)
         y += sub.height + unit * 0.04
       }
-      const button = cta(tx, Math.min(y, panel.y + panel.h - m - ctaSize * 2.6))
+      const panelBottom = panel.y + panel.h - m - ctaSize * 2.6
+      const chip = Math.round(unit * 0.06)
+      for (const f of spec.features.slice(0, 3)) {
+        if (y + chip > panelBottom - unit * 0.03) break
+        layers.push(icon("Feature icon", f.icon, tx, y, chip, palette.accent, palette.soft, style.iconVariant))
+        const label = text("Feature", f.label, { x: tx + chip + unit * 0.02, y, width: panel.w - m * 2 - chip - unit * 0.02, fontSize: Math.round(subSize * 0.8), color: palette.text, font: "body", fontWeight: 600, lineHeight: 1.2 })
+        label.y = y + (chip - label.height) / 2
+        layers.push(label)
+        y += chip + unit * 0.02
+      }
+      const button = cta(tx, Math.min(y + unit * 0.02, panelBottom))
       if (button) layers.push(button)
       break
     }
@@ -357,6 +518,91 @@ function coverLayers(spec: DesignSpec, ctx: ComposeContext, palette: ReturnType<
       }
       break
     }
+    case "feature_list": {
+      let y = m * 1.1
+      const b = badge(m, y)
+      if (b) {
+        layers.push(b)
+        y += b.height + unit * 0.03
+      }
+      const headline = text("Headline", spec.headline, { x: m, y, width: W - m * 2, fontSize: Math.round(headlineSize * 0.85), color: ink, lineHeight: 1.08 })
+      layers.push(headline)
+      y += headline.height + unit * 0.025
+      if (spec.subheadline) {
+        const sub = text("Subheadline", spec.subheadline, { x: m, y, width: W * 0.78, fontSize: Math.round(subSize * 0.9), color: ink, font: "body", fontWeight: 400, lineHeight: 1.35 })
+        layers.push(sub)
+        y += sub.height + unit * 0.045
+      }
+      const framed = Boolean(ctx.imageAssetId) && spec.imageTreatment !== "none"
+      const colW = framed ? W * 0.5 - m : W - m * 2
+      const items = spec.features.slice(0, 4)
+      const chip = Math.round(unit * 0.085)
+      const ctaTop = H - m - ctaSize * 2.6
+      const rowH = Math.min(chip + unit * 0.035, (ctaTop - unit * 0.04 - y) / Math.max(1, items.length))
+      items.forEach((f, i) => {
+        const ry = y + i * rowH
+        layers.push(icon("Feature icon", f.icon, m, ry, Math.min(chip, rowH - unit * 0.01), palette.accent, palette.soft, style.iconVariant))
+        const label = text("Feature", f.label, { x: m + chip + unit * 0.03, y: ry, width: colW - chip - unit * 0.03, fontSize: Math.round(subSize * 0.95), color: ink, font: "body", fontWeight: 600, lineHeight: 1.2 })
+        label.y = ry + (Math.min(chip, rowH) - label.height) / 2
+        layers.push(label)
+      })
+      if (framed && ctx.imageAssetId) {
+        const fx = W * 0.54
+        const fh = Math.max(unit * 0.3, ctaTop - y - unit * 0.02)
+        layers.push({ ...shape("Image backdrop", fx + unit * 0.025, y + unit * 0.025, W - m - fx, fh, palette.accent), radius: Math.round(unit * 0.04), opacity: 0.9 })
+        layers.push(image("Photo", ctx.imageAssetId, fx, y, W - m - fx, fh, { radius: Math.round(unit * 0.04) }))
+      }
+      const button = cta(m, ctaTop)
+      if (button) layers.push(button)
+      break
+    }
+    case "showcase": {
+      const hasImage = Boolean(ctx.imageAssetId) && spec.imageTreatment !== "none"
+      let y = m
+      if (hasImage && ctx.imageAssetId) {
+        const fw = W * (H > W ? 0.8 : 0.72)
+        const fh = H * (H > W ? 0.46 : 0.5)
+        const fx = (W - fw) / 2
+        layers.push({ ...shape("Image backdrop", fx + unit * 0.03, y + unit * 0.03, fw, fh, palette.accent), radius: Math.round(unit * 0.045) })
+        layers.push(image("Photo", ctx.imageAssetId, fx, y, fw, fh, { radius: Math.round(unit * 0.045) }))
+        const b = badge(0, y + fh - unit * 0.05)
+        if (b) {
+          b.x = fx + fw - b.width + unit * 0.02
+          layers.push(b)
+        }
+        y += fh + unit * 0.06
+      } else {
+        const b = badge(0, y)
+        if (b) {
+          b.x = (W - b.width) / 2
+          layers.push(b)
+          y += b.height + unit * 0.05
+        }
+        y = Math.max(y, H * 0.24)
+      }
+      const headline = text("Headline", spec.headline, { x: m, y, width: W - m * 2, fontSize: Math.round(headlineSize * (hasImage ? 0.75 : 1)), color: ink, align: "center", lineHeight: 1.08 })
+      layers.push(headline)
+      y += headline.height + unit * 0.02
+      if (spec.subheadline) {
+        const sub = text("Subheadline", spec.subheadline, { x: m * 1.4, y, width: W - m * 2.8, fontSize: Math.round(subSize * 0.88), color: ink, align: "center", font: "body", fontWeight: 400, lineHeight: 1.35 })
+        layers.push(sub)
+        y += sub.height + unit * 0.03
+      }
+      const items = hasImage ? [] : spec.features.slice(0, 3)
+      if (items.length) {
+        const size = Math.round(unit * 0.1)
+        const gap = (W - m * 2 - size * items.length) / (items.length + 1)
+        items.forEach((f, i) => {
+          const x = m + gap * (i + 1) + size * i
+          layers.push(icon("Feature icon", f.icon, x, y, size, palette.accent, palette.soft, style.iconVariant))
+          layers.push(text("Feature", f.label, { x: x - gap / 2 + 4, y: y + size + unit * 0.015, width: size + gap - 8, fontSize: Math.round(subSize * 0.72), color: ink, align: "center", font: "body", fontWeight: 600, lineHeight: 1.2 }))
+        })
+        y += size + unit * 0.11
+      }
+      const button = cta(0, Math.min(Math.max(y, H * 0.7), H - m - ctaSize * 2.6), "center")
+      if (button) layers.push(button)
+      break
+    }
     default: {
       const unreachable: never = spec.layout
       throw new Error(`Unknown layout ${String(unreachable)}`)
@@ -415,13 +661,35 @@ function slidePage(slide: DesignSpec["slides"][number], index: number, total: nu
 
 /** Deterministic layout engine: spec + format + brand → editable design document. */
 export function composeDocument(spec: DesignSpec, ctx: ComposeContext): DesignDocument {
+  activeStyle = ctx.style ?? DEFAULT_DESIGN_STYLE
+  try {
+    return composeWithStyle(spec, ctx)
+  } finally {
+    activeStyle = null
+  }
+}
+
+function composeWithStyle(spec: DesignSpec, ctx: ComposeContext): DesignDocument {
   const palette = resolvePalette(spec.palette, ctx.brandColors)
   const background = backgroundFor(spec, palette, ctx.imageAssetId)
-  const onImage = background.type === "image" && spec.layout !== "split" && spec.layout !== "bottom_band"
+  const onImage =
+    background.type === "image" && spec.layout !== "split" && spec.layout !== "bottom_band" && spec.layout !== "feature_list" && spec.layout !== "showcase"
+  const { width: W, height: H } = ctx.format
+  const unit = Math.min(W, H)
+  const backdrop: Layer[] = []
+  const patternKind = spec.pattern !== "none" ? spec.pattern : spec.backgroundStyle === "pattern" ? "dots" : null
+  if (patternKind && !onImage) {
+    backdrop.push(pattern(patternKind, 0, 0, W, H, palette.text, spec.backgroundStyle === "pattern" ? 0.12 : 0.07, Math.max(1, unit / 540)))
+  }
+  backdrop.push(...decorations(spec, W, H, palette, onImage))
   const cover: DesignPage = {
     id: newId("page"),
     background,
-    layers: [...coverLayers(spec, ctx, palette, onImage), ...brandMark(ctx, onImage ? "#FFFFFF" : palette.text)],
+    layers: applyStyle(
+      [...backdrop, ...coverLayers(spec, ctx, palette, onImage), ...brandMark(ctx, onImage ? "#FFFFFF" : palette.text)],
+      ctx.style ?? DEFAULT_DESIGN_STYLE,
+      unit
+    ),
   }
   const slides = ctx.format.maxPages > 1 ? spec.slides.slice(0, ctx.format.maxPages - 1) : []
   return {

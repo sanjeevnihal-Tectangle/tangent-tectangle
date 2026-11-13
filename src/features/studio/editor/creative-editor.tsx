@@ -46,8 +46,7 @@ import {
   removeLayer,
   removePage,
   updateLayer,
-  updatePage,
-} from "@/features/studio/editor/document-ops"
+  updatePage, defaultIcon, defaultPattern } from "@/features/studio/editor/document-ops"
 import { EditorCanvas } from "@/features/studio/editor/editor-canvas"
 import { downloadBlob, exportStagePages, slugify } from "@/features/studio/editor/export"
 import { LayersPanel } from "@/features/studio/editor/layers-panel"
@@ -421,6 +420,8 @@ export function CreativeEditor({
               onAddText={() => insertLayer(defaultText(doc, swatches[0] ?? "#111111"))}
               onAddShape={(shape) => insertLayer(defaultShape(doc, swatches[1] ?? swatches[0] ?? "#E4572E", shape))}
               onAddImage={() => setPicker("new-layer")}
+              onAddIcon={() => insertLayer(defaultIcon(doc, swatches[0] ?? "#111111", swatches[1] ? `${swatches[1]}` : null))}
+              onAddPattern={() => insertLayer(defaultPattern(doc, swatches[0] ?? "#111111"))}
               onSelectPage={(i) => {
                 setPageIndex(i)
                 setSelectedId(null)

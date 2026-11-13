@@ -12,7 +12,7 @@ import type { DesignDocument } from "@/lib/creative/document"
 import { getFormat, isFormatId, type CreativeFormat } from "@/lib/creative/formats"
 import { composeContext } from "@/features/studio/server"
 import { describeDesignTask, DESIGN_SYSTEM } from "@/lib/creative/agent-design"
-import { composeDocument, designSpecSchema, type DesignSpec } from "@/lib/creative/layout"
+import { composeDocument, designSpecSchema, SPEC_GRAPHIC_DEFAULTS, type DesignSpec } from "@/lib/creative/layout"
 import { CREATIVE_TEMPLATES, templateSpec } from "@/lib/creative/templates"
 import type { WorkspaceRepository } from "@/lib/data/types"
 import { CONTENT_FORMATS, type ContentItem, type ContentPlatform } from "@/lib/domain/content"
@@ -158,6 +158,7 @@ export async function composeDesign(workspace: string, input: z.input<typeof com
   const format = getFormat(formatId)
   try {
     const business = await loadBusinessContext(repository)
+    const { ctx, brandProfileId, brandStyleText } = await composeContext(repository, context, format, imageAssetId)
     const result = await provider.generateStructured({
       tier: "fast",
       system: DESIGN_SYSTEM,
@@ -165,16 +166,16 @@ export async function composeDesign(workspace: string, input: z.input<typeof com
         `## Business and brand context\n${business.text}`,
         `## Task\n${describeTask(format, objective, description)}`,
         concept ? `## Chosen concept\n${concept.name}: ${concept.visualDirection}` : null,
-        `A photo is ${imageAssetId ? "available" : "NOT available"} for this design.`,
+        brandStyleText ? `## Brand visual style (follow it)\n${brandStyleText}` : null,
+        imageAssetId ? "An image is available for this design." : "No image is available: make a strong graphic design (features with icons, pattern, decoration).",
       ]
         .filter(Boolean)
         .join("\n\n"),
       schema: designSpecSchema,
       schemaName: "design_spec",
-      maxOutputTokens: 3000,
+      maxOutputTokens: 4000,
     })
     await meterAi(repository, result.usage, "studio.compose")
-    const { ctx, brandProfileId } = await composeContext(repository, context, format, imageAssetId)
     const document = composeDocument(result.data, ctx)
     const projectId = await saveNewProject(repository, context, {
       name: concept?.name ? `${concept.name} — ${format.label}` : result.data.headline || format.label,
@@ -230,6 +231,7 @@ export async function createBlank(workspace: string, formatId: string): Promise<
       backgroundStyle: "solid",
       imagePrompt: "",
       slides: [],
+      ...SPEC_GRAPHIC_DEFAULTS,
     }
     const projectId = await saveNewProject(repository, context, {
       name: `Untitled ${format.label}`,

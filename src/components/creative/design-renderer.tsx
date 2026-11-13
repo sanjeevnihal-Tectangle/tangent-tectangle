@@ -1,6 +1,9 @@
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react"
 
 import { DESIGN_FONT_STACKS } from "@/components/creative/design-fonts"
+import { DESIGN_ICON_COMPONENTS } from "@/components/creative/design-icons"
+import { isDesignIcon } from "@/lib/creative/icons"
+import { BLOB_PATH, patternStyle } from "@/lib/creative/patterns"
 import type { Background, DesignDocument, DesignPage, Layer } from "@/lib/creative/document"
 import { cn } from "@/lib/utils"
 
@@ -67,6 +70,13 @@ function LayerView({ layer, assetUrls }: { layer: Layer; assetUrls: AssetUrls })
         </div>
       )
     case "shape":
+      if (layer.shape === "blob") {
+        return (
+          <svg style={layerBox(layer)} viewBox="-100 -100 200 200" preserveAspectRatio="none" aria-hidden>
+            <path d={BLOB_PATH} fill={layer.fill} />
+          </svg>
+        )
+      }
       return (
         <div
           style={{
@@ -76,6 +86,33 @@ function LayerView({ layer, assetUrls }: { layer: Layer; assetUrls: AssetUrls })
           }}
         />
       )
+    case "icon": {
+      const Icon = isDesignIcon(layer.icon) ? DESIGN_ICON_COMPONENTS[layer.icon] : DESIGN_ICON_COMPONENTS.sparkles
+      const size = Math.max(4, Math.min(layer.width, layer.height) - layer.padding * 2)
+      return (
+        <div
+          style={{
+            ...layerBox(layer),
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: layer.background ?? undefined,
+            borderRadius: layer.radius,
+          }}
+        >
+          <Icon
+            width={size}
+            height={size}
+            color={layer.color}
+            strokeWidth={layer.strokeWidth}
+            fill={layer.variant === "filled" ? layer.color : layer.variant === "duotone" ? layer.color : "none"}
+            fillOpacity={layer.variant === "duotone" ? 0.25 : 1}
+          />
+        </div>
+      )
+    }
+    case "pattern":
+      return <div style={{ ...layerBox(layer), ...patternStyle(layer.pattern, layer.color, layer.scale), borderRadius: layer.radius }} />
     case "image": {
       const url = layer.assetId ? assetUrls[layer.assetId] : undefined
       return (
@@ -124,6 +161,7 @@ export function DesignPageView({
 }) {
   return (
     <div
+      data-design-page=""
       data-export-id={exportId}
       onPointerDown={onBackgroundPointerDown}
       style={{ position: "relative", width: document.width, height: document.height, overflow: "hidden", ...backgroundStyle(page.background, assetUrls) }}

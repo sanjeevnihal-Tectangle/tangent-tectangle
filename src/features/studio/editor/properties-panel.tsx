@@ -16,11 +16,17 @@ import {
   type Background,
   type DesignDocument,
   type DesignPage,
+  type IconLayer,
   type ImageLayer,
   type Layer,
+  ICON_VARIANTS,
+  PATTERN_KINDS,
+  type PatternLayer,
   type ShapeLayer,
   type TextLayer,
 } from "@/lib/creative/document"
+import { DESIGN_ICON_COMPONENTS } from "@/components/creative/design-icons"
+import { DESIGN_ICONS, type DesignIcon } from "@/lib/creative/icons"
 import { cn } from "@/lib/utils"
 
 const HEX = /^#[0-9a-fA-F]{6}$/
@@ -280,6 +286,7 @@ export function PropertiesPanel({
             <ToggleGroup type="single" variant="outline" size="sm" spacing={0} value={s.shape} onValueChange={(shape) => shape && onLayerPatch({ shape: shape as ShapeLayer["shape"] })} className="w-full">
               <ToggleGroupItem value="rect" className="flex-1 text-xs">Rectangle</ToggleGroupItem>
               <ToggleGroupItem value="ellipse" className="flex-1 text-xs">Ellipse</ToggleGroupItem>
+              <ToggleGroupItem value="blob" className="flex-1 text-xs">Blob</ToggleGroupItem>
             </ToggleGroup>
             <ColorField label="Fill" value={s.fill} swatches={["#FFFFFF", "#111111", ...swatches]} onChange={(fill) => onLayerPatch({ fill }, "fill")} />
             {s.shape === "rect" ? <NumberField label="Corner radius" value={s.radius} min={0} max={2000} onChange={(radius) => onLayerPatch({ radius }, "rad")} /> : null}
@@ -299,6 +306,74 @@ export function PropertiesPanel({
               <ToggleGroupItem value="contain" className="flex-1 text-xs">Fit inside</ToggleGroupItem>
             </ToggleGroup>
             <NumberField label="Corner radius" value={img.radius} min={0} max={2000} onChange={(radius) => onLayerPatch({ radius }, "rad")} />
+          </Section>
+          {geometry}
+        </div>
+      )
+    }
+    case "icon": {
+      const ic: IconLayer = layer
+      return (
+        <div>
+          <Section title="Icon">
+            <div className="grid max-h-48 grid-cols-6 gap-1 overflow-y-auto rounded-md border p-1" role="listbox" aria-label="Icon">
+              {DESIGN_ICONS.map((name) => {
+                const Glyph = DESIGN_ICON_COMPONENTS[name as DesignIcon]
+                return (
+                  <button
+                    key={name}
+                    type="button"
+                    role="option"
+                    aria-selected={ic.icon === name}
+                    title={name}
+                    onClick={() => onLayerPatch({ icon: name })}
+                    className={cn("flex aspect-square items-center justify-center rounded hover:bg-muted", ic.icon === name && "bg-muted ring-1 ring-foreground/30")}
+                  >
+                    <Glyph className="size-4" />
+                  </button>
+                )
+              })}
+            </div>
+            <ToggleGroup type="single" variant="outline" size="sm" spacing={0} value={ic.variant} onValueChange={(v) => v && onLayerPatch({ variant: v as IconLayer["variant"] })} className="w-full">
+              {ICON_VARIANTS.map((v) => (
+                <ToggleGroupItem key={v} value={v} className="flex-1 text-xs capitalize">{v}</ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+            <ColorField label="Icon colour" value={ic.color} swatches={["#FFFFFF", "#111111", ...swatches]} onChange={(color) => onLayerPatch({ color }, "icon-color")} />
+            <NumberField label="Stroke width" value={ic.strokeWidth} min={0.5} max={4} step={0.25} onChange={(strokeWidth) => onLayerPatch({ strokeWidth }, "stroke")} />
+            <label className="flex items-center justify-between text-xs">
+              Chip behind icon
+              <Switch checked={ic.background !== null} onCheckedChange={(on) => onLayerPatch({ background: on ? swatches[1] ?? swatches[0] ?? "#EEEEEE" : null, padding: on ? Math.max(ic.padding, Math.round(ic.width * 0.22)) : 0 })} />
+            </label>
+            {ic.background !== null ? (
+              <>
+                <ColorField label="Chip colour" value={ic.background} swatches={["#FFFFFF", ...swatches]} onChange={(background) => onLayerPatch({ background }, "chip")} />
+                <div className="grid grid-cols-2 gap-2">
+                  <NumberField label="Padding" value={ic.padding} min={0} max={400} onChange={(padding) => onLayerPatch({ padding }, "pad")} />
+                  <NumberField label="Corner radius" value={ic.radius} min={0} max={1000} onChange={(radius) => onLayerPatch({ radius }, "rad")} />
+                </div>
+              </>
+            ) : null}
+          </Section>
+          {geometry}
+        </div>
+      )
+    }
+    case "pattern": {
+      const pt: PatternLayer = layer
+      return (
+        <div>
+          <Section title="Pattern">
+            <ToggleGroup type="single" variant="outline" size="sm" spacing={0} value={pt.pattern} onValueChange={(v) => v && onLayerPatch({ pattern: v as PatternLayer["pattern"] })} className="grid w-full grid-cols-3">
+              {PATTERN_KINDS.map((k) => (
+                <ToggleGroupItem key={k} value={k} className="text-xs capitalize">{k}</ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+            <ColorField label="Colour" value={pt.color} swatches={["#FFFFFF", "#111111", ...swatches]} onChange={(color) => onLayerPatch({ color }, "pattern-color")} />
+            <div className="grid grid-cols-2 gap-2">
+              <NumberField label="Scale" value={pt.scale} min={0.25} max={6} step={0.25} onChange={(scale) => onLayerPatch({ scale }, "scale")} />
+              <NumberField label="Corner radius" value={pt.radius} min={0} max={2000} onChange={(radius) => onLayerPatch({ radius }, "rad")} />
+            </div>
           </Section>
           {geometry}
         </div>

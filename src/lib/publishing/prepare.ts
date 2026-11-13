@@ -94,7 +94,8 @@ export function prepareExternalActions(input: PrepareInput): PreparedAction[] {
       continue
     }
     const image = input.image
-    if (provider === "instagram") {
+    if (provider === "instagram" && !input.creative) {
+      // With a Creative Studio design, the rendered design (JPEG) is the post image.
       if (!image) {
         prepared.push(block("blocked", `Instagram posts need an image. ${input.imageIssue ?? "No image was generated."}`))
         continue
@@ -114,7 +115,7 @@ export function prepareExternalActions(input: PrepareInput): PreparedAction[] {
       accountName: usable.account.displayName,
       externalAccountId: usable.account.externalAccountId,
       title: (variant.headline || input.title).slice(0, 160),
-      ...(input.creative && image ? { creativeProjectId: input.creative.projectId, designRendered: false } : {}),
+      ...(input.creative ? { creativeProjectId: input.creative.projectId, designRendered: false } : {}),
     }
     prepared.push({
       action: {

@@ -102,11 +102,55 @@ export function defaultText(document: DesignDocument, color: string): Layer {
   }
 }
 
-export function defaultShape(document: DesignDocument, fill: string, shape: "rect" | "ellipse"): Layer {
+export function defaultIcon(document: DesignDocument, color: string, chip: string | null): Layer {
+  const size = Math.round(Math.min(document.width, document.height) * 0.14)
+  return {
+    id: newId("layer"),
+    name: "Icon",
+    type: "icon",
+    icon: "sparkles",
+    x: (document.width - size) / 2,
+    y: (document.height - size) / 2,
+    width: size,
+    height: size,
+    rotation: 0,
+    opacity: 1,
+    locked: false,
+    hidden: false,
+    color,
+    variant: "outline",
+    strokeWidth: 2,
+    background: chip,
+    padding: chip ? Math.round(size * 0.22) : 0,
+    radius: Math.round(size * 0.28),
+  }
+}
+
+export function defaultPattern(document: DesignDocument, color: string): Layer {
+  return {
+    id: newId("layer"),
+    name: "Pattern",
+    type: "pattern",
+    pattern: "dots",
+    x: 0,
+    y: 0,
+    width: document.width,
+    height: document.height,
+    rotation: 0,
+    opacity: 0.18,
+    locked: false,
+    hidden: false,
+    color,
+    scale: Math.max(1, Math.min(document.width, document.height) / 540),
+    radius: 0,
+  }
+}
+
+export function defaultShape(document: DesignDocument, fill: string, shape: "rect" | "ellipse" | "blob"): Layer {
   const size = Math.min(document.width, document.height) * 0.3
   return {
     id: newId("layer"),
-    name: shape === "ellipse" ? "Circle" : "Rectangle",
+    name: shape === "ellipse" ? "Circle" : shape === "blob" ? "Blob" : "Rectangle",
     type: "shape",
     shape,
     x: (document.width - size) / 2,

@@ -1,6 +1,8 @@
 import { z } from "zod"
 
-import { DESIGN_FONTS } from "@/lib/creative/document"
+import { DESIGN_FONTS, ICON_VARIANTS, PATTERN_KINDS, type PatternKind } from "@/lib/creative/document"
+
+export { PATTERN_KINDS, type PatternKind }
 
 const hexColor = z
   .string()
@@ -20,9 +22,7 @@ export const IMAGE_STYLE_LABELS: Record<(typeof IMAGE_STYLES)[number], string> =
   graphic: "Graphic shapes & icons (no photos)",
   mixed: "Mix, chosen per creative",
 }
-export const ICON_STYLES = ["outline", "filled", "duotone"] as const
-export const PATTERN_KINDS = ["dots", "grid", "diagonal", "waves", "circles", "confetti"] as const
-export type PatternKind = (typeof PATTERN_KINDS)[number]
+export const ICON_STYLES = ICON_VARIANTS
 export const CORNER_STYLES = ["rounded", "sharp", "pill"] as const
 
 /** How the brand looks beyond colours: imagery, illustration, icons, patterns, fonts and shapes. */

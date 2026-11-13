@@ -20,6 +20,11 @@ export const DESIGN_FONT_LABELS: Record<DesignFont, string> = {
   condensed: "Bebas Neue",
 }
 
+export const PATTERN_KINDS = ["dots", "grid", "diagonal", "waves", "circles", "confetti"] as const
+export type PatternKind = (typeof PATTERN_KINDS)[number]
+
+export const ICON_VARIANTS = ["outline", "filled", "duotone"] as const
+
 const baseLayer = {
   id: z.string(),
   name: z.string().max(80),
@@ -54,7 +59,7 @@ export const textLayerSchema = z.object({
 export const shapeLayerSchema = z.object({
   ...baseLayer,
   type: z.literal("shape"),
-  shape: z.enum(["rect", "ellipse"]),
+  shape: z.enum(["rect", "ellipse", "blob"]),
   fill: hex,
   radius: z.number().min(0).max(2000),
 })
@@ -67,11 +72,37 @@ export const imageLayerSchema = z.object({
   radius: z.number().min(0).max(2000),
 })
 
-export const layerSchema = z.discriminatedUnion("type", [textLayerSchema, shapeLayerSchema, imageLayerSchema])
+/** A pictogram from the curated design icon set (lib/creative/icons), optionally on a chip. */
+export const iconLayerSchema = z.object({
+  ...baseLayer,
+  type: z.literal("icon"),
+  icon: z.string().max(40),
+  color: hex,
+  variant: z.enum(ICON_VARIANTS),
+  strokeWidth: z.number().min(0.5).max(4),
+  /** Chip behind the icon; null = no chip. */
+  background: hex.nullable(),
+  padding: z.number().min(0).max(400),
+  radius: z.number().min(0).max(1000),
+})
+
+/** A repeating SVG pattern filling the layer box. */
+export const patternLayerSchema = z.object({
+  ...baseLayer,
+  type: z.literal("pattern"),
+  pattern: z.enum(PATTERN_KINDS),
+  color: hex,
+  scale: z.number().min(0.25).max(6),
+  radius: z.number().min(0).max(2000),
+})
+
+export const layerSchema = z.discriminatedUnion("type", [textLayerSchema, shapeLayerSchema, imageLayerSchema, iconLayerSchema, patternLayerSchema])
 export type Layer = z.infer<typeof layerSchema>
 export type TextLayer = z.infer<typeof textLayerSchema>
 export type ShapeLayer = z.infer<typeof shapeLayerSchema>
 export type ImageLayer = z.infer<typeof imageLayerSchema>
+export type IconLayer = z.infer<typeof iconLayerSchema>
+export type PatternLayer = z.infer<typeof patternLayerSchema>
 
 export const backgroundSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("solid"), color: hex }),

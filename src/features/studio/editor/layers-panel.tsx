@@ -1,6 +1,6 @@
 "use client"
 
-import { ArrowDown, ArrowUp, Circle, Copy, Eye, EyeOff, ImageIcon, Lock, LockOpen, Plus, Square, Trash2, Type } from "lucide-react"
+import { ArrowDown, ArrowUp, Blend, Circle, Copy, Eye, EyeOff, Grid3x3, ImageIcon, Lock, LockOpen, Plus, Shapes, Sparkles, Square, Trash2, Type } from "lucide-react"
 
 import type { AssetUrls } from "@/components/creative/design-renderer"
 import { FitThumbnail } from "@/components/creative/fit-thumbnail"
@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import type { DesignDocument, Layer } from "@/lib/creative/document"
 import { cn } from "@/lib/utils"
 
-const ICONS = { text: Type, shape: Square, image: ImageIcon } as const
+const ICONS = { text: Type, shape: Square, image: ImageIcon, icon: Shapes, pattern: Grid3x3 } as const
 
 export function LayersPanel({
   document,
@@ -24,6 +24,8 @@ export function LayersPanel({
   onAddText,
   onAddShape,
   onAddImage,
+  onAddIcon,
+  onAddPattern,
   onSelectPage,
   onAddPage,
   onRemovePage,
@@ -40,8 +42,10 @@ export function LayersPanel({
   onDuplicate: (id: string) => void
   onRemove: (id: string) => void
   onAddText: () => void
-  onAddShape: (shape: "rect" | "ellipse") => void
+  onAddShape: (shape: "rect" | "ellipse" | "blob") => void
   onAddImage: () => void
+  onAddIcon: () => void
+  onAddPattern: () => void
   onSelectPage: (index: number) => void
   onAddPage: () => void
   onRemovePage: (index: number) => void
@@ -59,6 +63,9 @@ export function LayersPanel({
           <Button variant="outline" size="sm" onClick={() => onAddShape("rect")} aria-label="Add rectangle"><Square /></Button>
           <Button variant="outline" size="sm" onClick={() => onAddShape("ellipse")} aria-label="Add circle"><Circle /></Button>
           <Button variant="outline" size="sm" onClick={onAddImage} aria-label="Add image"><ImageIcon /></Button>
+          <Button variant="outline" size="sm" onClick={onAddIcon} aria-label="Add icon"><Sparkles /></Button>
+          <Button variant="outline" size="sm" onClick={() => onAddShape("blob")} aria-label="Add blob"><Blend /></Button>
+          <Button variant="outline" size="sm" onClick={onAddPattern} aria-label="Add pattern"><Grid3x3 /></Button>
         </div>
       </section>
 

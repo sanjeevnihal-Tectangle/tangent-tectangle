@@ -23,6 +23,14 @@ const spec: DesignSpec = {
     { headline: "Nihari", body: "Eight hours on the stove." },
     { headline: "Sarson da saag", body: "Churned by hand." },
   ],
+  features: [
+    { icon: "utensils", label: "Slow-cooked classics" },
+    { icon: "leaf", label: "Fresh winter greens" },
+    { icon: "map-pin", label: "Three outlets" },
+  ],
+  pattern: "dots",
+  decoration: "blobs",
+  imageTreatment: "framed",
 }
 
 function ctx(formatId: string, imageAssetId: string | null = null) {
@@ -30,6 +38,33 @@ function ctx(formatId: string, imageAssetId: string | null = null) {
 }
 
 describe("layout engine", () => {
+  it("renders every decoration, pattern and image treatment as a valid document", () => {
+    for (const decoration of ["none", "blobs", "circles", "lines", "frame"] as const) {
+      for (const imageTreatment of ["full_bleed", "framed", "none"] as const) {
+        for (const backgroundStyle of ["solid", "gradient", "image", "pattern"] as const) {
+          const document = composeDocument({ ...spec, decoration, imageTreatment, backgroundStyle }, ctx("instagram_post", "asset-1"))
+          expect(designDocumentSchema.safeParse(document).success, `${decoration}/${imageTreatment}/${backgroundStyle}`).toBe(true)
+        }
+      }
+    }
+  })
+
+  it("places feature icons and applies the brand's fonts and corners", () => {
+    const document = composeDocument(
+      { ...spec, layout: "feature_list" },
+      { ...ctx("instagram_post", "asset-1"), style: { headingFont: "serif", bodyFont: "display", iconVariant: "duotone", cornerStyle: "sharp" } }
+    )
+    const layers = document.pages[0]!.layers
+    const icons = layers.filter((l) => l.type === "icon")
+    expect(icons).toHaveLength(3)
+    expect(icons.every((l) => l.type === "icon" && l.variant === "duotone")).toBe(true)
+    expect(layers.some((l) => l.type === "pattern")).toBe(true)
+    const headline = layers.find((l) => l.type === "text" && l.name === "Headline")
+    expect(headline?.type === "text" && headline.font).toBe("serif")
+    const cta = layers.find((l) => l.type === "text" && l.name === "Call to action")
+    expect(cta?.type === "text" && cta.radius).toBe(0)
+  })
+
   it("produces a valid document for every format and layout", () => {
     for (const format of CREATIVE_FORMATS) {
       for (const layout of DESIGN_LAYOUTS) {
@@ -57,7 +92,7 @@ describe("layout engine", () => {
   })
 
   it("uses the photo as background when requested and available", () => {
-    const withImage = composeDocument({ ...spec, backgroundStyle: "image" }, ctx("instagram_post", "photo-1"))
+    const withImage = composeDocument({ ...spec, imageTreatment: "full_bleed", backgroundStyle: "image" }, ctx("instagram_post", "photo-1"))
     expect(withImage.pages[0]!.background).toMatchObject({ type: "image", assetId: "photo-1" })
     const without = composeDocument({ ...spec, backgroundStyle: "image" }, ctx("instagram_post", null))
     expect(without.pages[0]!.background.type).not.toBe("image")

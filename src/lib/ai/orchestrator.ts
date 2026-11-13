@@ -56,8 +56,10 @@ ${ACTIVE_AGENT_IDS.map((id) => `- ${id}: ${AGENTS[id].summary}`).join("\n")}
 
 Tools Tangent runs for the agents (do not plan steps for these; they run automatically):
 - Image generation: when produceImage is true, the Graphic Designer's first concept is rendered into a real image and saved to the Asset Library.
-- Creative Studio: after the image, Tangent builds an editable Creative Studio design (layout, headline, CTA, brand colours and
-  logo over the image). That design is what gets published, and the user can edit it before approving.
+- Creative Studio: Tangent then builds an editable Creative Studio design (layout, headline, CTA, feature callouts with
+  icons, patterns and graphic accents in the brand's style, logo, and the image if any). That design is what gets
+  published, and the user can edit it before approving. Following the brand kit, the image may be a photo, an
+  illustration, a 3D render, the product's own image from the catalogue, or none (purely graphic design).
 - Publishing: each publish_post in externalActions on a platform listed as connected and ready becomes an approval card.
   When the user approves it in the app, Tangent publishes it with the connected account and shows the post link.
 
@@ -118,6 +120,30 @@ function aspectForImage(concept: CreativeOutput["concepts"][number], plan: Execu
   if (ratio > 1.15) return "landscape"
   if (ratio < 0.87) return "portrait"
   return "square"
+}
+
+type ImageryMode = "photo" | "illustration" | "3d" | "graphic"
+
+/** What kind of image the brand wants for this concept ("mixed" picks from the concept's wording). */
+function imageryMode(context: { brand: { visualStyle: { imageStyle: string } } | null }, concept: CreativeOutput["concepts"][number] | undefined): ImageryMode {
+  const style = context.brand?.visualStyle.imageStyle ?? "mixed"
+  if (style === "photo" || style === "illustration" || style === "3d" || style === "graphic") return style
+  const words = `${concept?.visualDirection ?? ""} ${concept?.imagePrompt ?? ""}`.toLowerCase()
+  if (/\b3d\b|render/.test(words)) return "3d"
+  if (/illustrat|vector|cartoon|flat design|isometric/.test(words)) return "illustration"
+  return "photo"
+}
+
+function stylePrompt(mode: ImageryMode, illustrationStyle: string, colors: string[]): string {
+  const palette = colors.length ? ` Use the brand colours ${colors.join(", ")}.` : ""
+  switch (mode) {
+    case "illustration":
+      return `Style: clean modern flat vector illustration${illustrationStyle ? ` (${illustrationStyle})` : ""}, simple shapes, plain light background, no gradients noise.${palette}`
+    case "3d":
+      return `Style: soft 3D render, clay/plastic materials, studio lighting, plain light background.${palette}`
+    default:
+      return "Style: natural, high-quality photography."
+  }
 }
 
 /** Orders tool steps after the steps they depend on. */
@@ -305,6 +331,7 @@ export async function* runOrchestrator(
     let failedSteps = 0
     let image: (GeneratedAsset & { mimeType: string }) | null = null
     let creative: GeneratedCreative | null = null
+    let imageKind: "photo" | "illustration" | "3d render" | "product image" = "photo"
     const requestText = plan.requestBrief.trim() ? `${message}\n\nSpecifics the user asked for:\n${plan.requestBrief.trim()}` : message
     let imageIssue: string | null = plan.produceImage ? null : "No image was requested in the plan."
     const toolDone = (stepId: string) => {
@@ -324,6 +351,37 @@ export async function* runOrchestrator(
           | { kind: "creative"; data: CreativeOutput }
           | undefined
         const first = concept?.data.concepts[0]
+        const mode = imageryMode(context, first)
+        const productImageId = context.product?.imageAssetIds[0] ?? null
+        if (productImageId && mode !== "illustration" && mode !== "3d") {
+          // Use the product's own photo or screenshot rather than inventing one.
+          const urls = await repository.resolveAssetUrls([productImageId]).catch(() => ({}) as Record<string, string>)
+          const ref: GeneratedAsset = {
+            stepId: step.id,
+            assetId: productImageId,
+            name: `${context.product?.name ?? "Product"} image`,
+            url: urls[productImageId] ?? null,
+            prompt: "Product image from the catalogue",
+            width: null,
+            height: null,
+          }
+          image = { ...ref, mimeType: "image/unknown" }
+          imageKind = "product image"
+          run.assets!.push(ref)
+          toolDone(step.id)
+          toolResults.push(`Used the product image of "${context.product?.name}" from the catalogue instead of generating one.`)
+          yield { type: "asset.generated", asset: ref }
+          yield { type: "tool.completed", stepId: step.id }
+          continue
+        }
+        if (mode === "graphic") {
+          // The brand designs with shapes, icons and patterns rather than photos.
+          imageIssue = null
+          toolDone(step.id)
+          toolResults.push("No photo generated: the brand kit uses graphic designs (shapes, icons, patterns).")
+          yield { type: "tool.completed", stepId: step.id }
+          continue
+        }
         const reason = !input.images.provider
           ? "Image generation isn't configured on the server (set IMAGE_PROVIDER=openai and an OpenAI API key with image credits)."
           : input.images.quotaError
@@ -338,7 +396,7 @@ export async function* runOrchestrator(
           yield { type: "step.failed", stepId: step.id, message: imageIssue }
           continue
         }
-        const prompt = `${first.imagePrompt}\n\nDo not render any text, letters, logos or watermarks in the image.`.slice(0, 2000)
+        const prompt = `${first.imagePrompt}\n\n${stylePrompt(mode, context.brand?.visualStyle.illustrationStyle ?? "", (context.brand?.colors ?? []).map((c) => c.hex))}\nDo not render any text, letters, logos or watermarks in the image.`.slice(0, 2000)
         try {
           const generated = await input.images.provider.generate({ prompt, aspect: aspectForImage(first, plan), format: "jpeg", signal })
           const asset = await repository.uploadAsset({
@@ -370,6 +428,7 @@ export async function* runOrchestrator(
             height: asset.height,
           }
           image = { ...ref, mimeType: asset.mimeType }
+          imageKind = mode === "illustration" ? "illustration" : mode === "3d" ? "3d render" : "photo"
           run.assets!.push(ref)
           toolDone(step.id)
           toolResults.push(`Generated image "${asset.name}" and saved it to the Asset Library.`)
@@ -393,12 +452,6 @@ export async function* runOrchestrator(
 
       if (step.id === DESIGN_STEP_ID) {
         // Tool: compose an editable Creative Studio design from the image, concept and copy.
-        if (!image) {
-          const issue = `No design was built because there is no image. ${imageIssue ?? ""}`.trim()
-          toolFailed(step.id, issue)
-          yield { type: "step.failed", stepId: step.id, message: issue }
-          continue
-        }
         const targets = plan.externalActions.map((a) => canonicalProvider(a.platform))
         const format = getFormat(targets.includes("instagram") || !targets.includes("facebook") ? "instagram_post" : "facebook_post")
         const concept = (
@@ -406,7 +459,13 @@ export async function* runOrchestrator(
         )?.data.concepts[0]
         const variant = produced.flatMap((p) => (p.output.kind === "copy" ? (p.output.data as CopyOutput).variants : []))[0]
         try {
-          const { ctx, brandProfileId } = await designComposeContext(repository, input.workspaceName, format, image.assetId, context.brand?.id)
+          const { ctx, brandProfileId, brandStyleText } = await designComposeContext(
+            repository,
+            input.workspaceName,
+            format,
+            image?.assetId ?? null,
+            context.brand?.id
+          )
           const designed = await createAgentDesign({
             provider,
             repository,
@@ -420,6 +479,8 @@ export async function* runOrchestrator(
             copy: variant ? { headline: variant.headline, body: variant.body, callToAction: variant.callToAction } : null,
             compose: ctx,
             brandProfileId,
+            brandStyle: brandStyleText,
+            imageKind,
             signal,
           })
           usage = addUsage(usage, designed.usage)
@@ -451,8 +512,8 @@ export async function* runOrchestrator(
           if (signal?.aborted) throw error
           const issue =
             error instanceof ProviderError
-              ? `The Creative Studio design couldn't be built: ${error.message}. The post will use the generated image instead.`
-              : "The Creative Studio design couldn't be built. The post will use the generated image instead."
+              ? `The Creative Studio design couldn't be built: ${error.message}.${image ? " The post will use the image instead." : ""}`
+              : `The Creative Studio design couldn't be built.${image ? " The post will use the image instead." : ""}`
           if (!(error instanceof ProviderError)) console.error("[tangent] design step failed", error)
           toolFailed(step.id, issue)
           toolResults.push(issue)

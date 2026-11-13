@@ -1,5 +1,5 @@
 import type { CreativeObjectiveId } from "@/lib/creative/formats"
-import type { DesignSpec } from "@/lib/creative/layout"
+import { SPEC_GRAPHIC_DEFAULTS, type DesignSpec } from "@/lib/creative/layout"
 
 export interface CreativeTemplate {
   id: string
@@ -8,7 +8,8 @@ export interface CreativeTemplate {
   formatId: string
   objective: CreativeObjectiveId
   /** Palette roles are resolved from the brand at compose time. */
-  spec: (businessName: string) => Omit<DesignSpec, "palette"> & { paletteMode: "light" | "dark" | "accent" }
+  spec: (businessName: string) => Omit<DesignSpec, "palette" | keyof typeof SPEC_GRAPHIC_DEFAULTS> &
+    Partial<typeof SPEC_GRAPHIC_DEFAULTS> & { paletteMode: "light" | "dark" | "accent" }
 }
 
 export const CREATIVE_TEMPLATES: CreativeTemplate[] = [
@@ -139,5 +140,5 @@ export function templatePalette(mode: "light" | "dark" | "accent", brandColors: 
 
 export function templateSpec(template: CreativeTemplate, businessName: string, brandColors: { hex: string; role: string }[]): DesignSpec {
   const { paletteMode, ...spec } = template.spec(businessName)
-  return { ...spec, palette: templatePalette(paletteMode, brandColors) }
+  return { ...SPEC_GRAPHIC_DEFAULTS, ...spec, palette: templatePalette(paletteMode, brandColors) }
 }
