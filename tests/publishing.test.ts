@@ -14,7 +14,7 @@ import {
   summarizeConnections,
 } from "@/lib/integrations/connections"
 import { encryptToken } from "@/lib/integrations/crypto"
-import { publishFacebookPost, publishInstagramImage, type FetchLike } from "@/lib/integrations/meta-publisher"
+import { publishFacebookPost, publishInstagramImage, resolveInstagramUserId, type FetchLike } from "@/lib/integrations/meta-publisher"
 import { approveAndPublish } from "@/lib/publishing/executor"
 import { captionFromVariant, socialPostPayloadSchema, type SocialPostPayload } from "@/lib/publishing/payload"
 import { prepareExternalActions } from "@/lib/publishing/prepare"
@@ -168,6 +168,20 @@ describe("Meta Graph publishing", () => {
     // POST bodies carry the token, never the URL.
     expect(calls[0]!.url).not.toContain("tok")
     expect(calls[3]!.body?.get("creation_id")).toBe("container-1")
+  })
+
+  it("resolves an Instagram handle to the numeric account id", async () => {
+    const { fetchImpl, calls } = fakeGraph([
+      { data: [{ instagram_business_account: { id: "999", username: "other" } }, { instagram_business_account: { id: "17841", username: "tectangle_" } }] },
+    ])
+    await expect(resolveInstagramUserId({ idOrHandle: "@tectangle_", accessToken: "t", fetchImpl })).resolves.toBe("17841")
+    expect(calls[0]!.url).toContain("/me/accounts")
+    await expect(resolveInstagramUserId({ idOrHandle: "17841400", accessToken: "t", fetchImpl })).resolves.toBe("17841400")
+  })
+
+  it("explains when the handle isn't a linked professional account", async () => {
+    const { fetchImpl } = fakeGraph([{ data: [] }, {}])
+    await expect(resolveInstagramUserId({ idOrHandle: "tectangle_", accessToken: "t", fetchImpl })).rejects.toThrow(/Business or Creator/)
   })
 
   it("surfaces Meta's error message and maps expired tokens", async () => {

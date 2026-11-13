@@ -81,6 +81,60 @@ async function graphCall<T>(
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
+ * The publishing API needs the numeric Instagram professional account id. Accounts
+ * connected with a direct token are often saved with the handle ("tectangle_" or
+ * "@tectangle_"), so resolve it through the Pages the token can see.
+ */
+export async function resolveInstagramUserId(input: {
+  idOrHandle: string
+  accessToken: string
+  fetchImpl?: FetchLike
+}): Promise<string> {
+  const value = input.idOrHandle.trim()
+  if (/^\d+$/.test(value)) return value
+  const handle = value.replace(/^@/, "").toLowerCase()
+  const fetchImpl = input.fetchImpl ?? fetch
+  type IgAccount = { id?: string; username?: string }
+  const candidates: IgAccount[] = []
+  try {
+    // User token: every Page the user manages, with its linked Instagram account.
+    const pages = await graphCall<{ data?: { instagram_business_account?: IgAccount }[] }>(
+      fetchImpl,
+      "GET",
+      "me/accounts",
+      { fields: "instagram_business_account{id,username}", access_token: input.accessToken },
+      "Finding the Instagram account"
+    )
+    for (const page of pages.data ?? []) if (page.instagram_business_account) candidates.push(page.instagram_business_account)
+  } catch (error) {
+    if (error instanceof IntegrationError && error.code === "token_expired") throw error
+    // Page tokens can't list /me/accounts; fall through to the Page itself.
+  }
+  if (candidates.length === 0) {
+    try {
+      const page = await graphCall<{ instagram_business_account?: IgAccount }>(
+        fetchImpl,
+        "GET",
+        "me",
+        { fields: "instagram_business_account{id,username}", access_token: input.accessToken },
+        "Finding the Instagram account"
+      )
+      if (page.instagram_business_account) candidates.push(page.instagram_business_account)
+    } catch (error) {
+      if (error instanceof IntegrationError && error.code === "token_expired") throw error
+    }
+  }
+  const match = candidates.find((c) => c.username?.toLowerCase() === handle) ?? (candidates.length === 1 ? candidates[0] : undefined)
+  if (!match?.id) {
+    throw new IntegrationError(
+      `Could not find an Instagram professional account "@${handle}" linked to a Facebook Page for this token. Make sure @${handle} is a Business or Creator account linked to your Page, then reconnect Instagram with "Add / Connect" (OAuth).`,
+      "permission_denied"
+    )
+  }
+  return match.id
+}
+
+/**
  * Instagram content publishing: create a media container from a public JPEG
  * URL, wait until Meta has processed it, then publish it.
  */

@@ -363,6 +363,26 @@ export async function* runOrchestrator(
         for (const { action, payload } of prepared) {
           let required: RequiredAction = action
           if (payload) {
+            // Accounts added without a token (e.g. direct connect with only a handle) can't publish.
+            let hasToken = false
+            try {
+              hasToken = Boolean(await repository.getConnectedAccountCredential(payload.connectedAccountId))
+            } catch (error) {
+              console.error("[tangent] could not check the stored credential", error)
+            }
+            if (!hasToken) {
+              required = {
+                ...action,
+                state: "blocked",
+                reason: `"${payload.accountName}" is listed as connected but no access token is stored for it, so Tangent can't post with it. Reconnect it with "Add / Connect" (OAuth) on the Integrations page.`,
+              }
+              toolResults.push(`${action.platform}: blocked — ${required.reason}`)
+              run.actions.push(required)
+              yield { type: "action.required", action: required }
+              continue
+            }
+          }
+          if (payload) {
             const request = {
               actionType: action.actionType,
               title: `${action.platform} post for ${payload.accountName}: ${payload.title}`.slice(0, 200),

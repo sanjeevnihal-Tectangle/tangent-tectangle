@@ -7,7 +7,13 @@ import { serverEnv } from "@/lib/env/server"
 import { accountReadiness, platformLabel } from "@/lib/integrations/connections"
 import { CredentialCryptoError, decryptToken } from "@/lib/integrations/crypto"
 import { IntegrationError } from "@/lib/integrations/gateway"
-import { publishFacebookPost, publishInstagramImage, type FetchLike, type PublishResult } from "@/lib/integrations/meta-publisher"
+import {
+  publishFacebookPost,
+  publishInstagramImage,
+  resolveInstagramUserId,
+  type FetchLike,
+  type PublishResult,
+} from "@/lib/integrations/meta-publisher"
 import { socialPostPayloadSchema, type PublishStatus, type SocialPostPayload } from "@/lib/publishing/payload"
 
 /**
@@ -56,7 +62,13 @@ async function publishPayload(
   switch (payload.platform) {
     case "instagram":
       if (!imageUrl) throw new IntegrationError("Instagram posts need an image.", "provider_error")
-      return publishInstagramImage({ igUserId: payload.externalAccountId, accessToken, imageUrl, caption: payload.caption, fetchImpl })
+      return publishInstagramImage({
+        igUserId: await resolveInstagramUserId({ idOrHandle: payload.externalAccountId, accessToken, fetchImpl }),
+        accessToken,
+        imageUrl,
+        caption: payload.caption,
+        fetchImpl,
+      })
     case "facebook":
       return publishFacebookPost({ pageId: payload.externalAccountId, accessToken, caption: payload.caption, imageUrl, fetchImpl })
     default: {
