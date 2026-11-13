@@ -15,7 +15,7 @@ import {
 } from "@/lib/integrations/connections"
 import { encryptToken } from "@/lib/integrations/crypto"
 import { publishFacebookPost, publishInstagramImage, resolveInstagramUserId, type FetchLike } from "@/lib/integrations/meta-publisher"
-import { approveAndPublish } from "@/lib/publishing/executor"
+import { approveAndPublish, latestApprovalId } from "@/lib/publishing/executor"
 import { captionFromVariant, socialPostPayloadSchema, type SocialPostPayload } from "@/lib/publishing/payload"
 import { prepareExternalActions } from "@/lib/publishing/prepare"
 
@@ -308,6 +308,17 @@ describe("approve & publish executor", () => {
     } as unknown as WorkspaceRepository
     return { repository, state }
   }
+
+  it("follows retried approvals to the newest version", async () => {
+    const statuses: Record<string, ApprovalStatus> = { v1: "superseded", v2: "superseded", v3: "pending" }
+    const next: Record<string, string> = { v1: "v2", v2: "v3" }
+    const repository = {
+      getApprovalRequest: async (id: string) => ({ id, status: statuses[id] }),
+      getNextApprovalVersionId: async (id: string) => next[id] ?? null,
+    } as unknown as WorkspaceRepository
+    await expect(latestApprovalId(repository, "v1")).resolves.toBe("v3")
+    await expect(latestApprovalId(repository, "v3")).resolves.toBe("v3")
+  })
 
   it("approves, decrypts the stored token server-side and publishes once", async () => {
     const { repository, state } = await fakeRepository("pending")

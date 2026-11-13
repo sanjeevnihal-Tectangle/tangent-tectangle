@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache"
 import { z } from "zod"
 
 import { ApprovalError } from "@/lib/approvals/engine"
-import { approveAndPublish, getPublishStatuses } from "@/lib/publishing/executor"
+import { approveAndPublish, getPublishStatuses, latestApprovalId } from "@/lib/publishing/executor"
 import type { PublishStatus } from "@/lib/publishing/payload"
 import { socialPostPayloadSchema } from "@/lib/publishing/payload"
 import { resolveWorkspace } from "@/lib/workspace/server"
@@ -45,6 +45,7 @@ export async function rejectPublish(workspace: string, approvalId: string): Prom
     return { ok: false, error: "Your role can't decide on publishing." }
   }
   try {
+    approvalId = await latestApprovalId(repository, approvalId)
     await repository.decideApproval(approvalId, "reject", null, context.user.id)
     await repository.recordAudit({
       action: "approval.reject",
@@ -75,7 +76,7 @@ export async function retryPublish(workspace: string, approvalId: string): Promi
     return { ok: false, error: "Your role can't approve publishing." }
   }
   try {
-    const previous = await repository.getApprovalRequest(approvalId)
+    const previous = await repository.getApprovalRequest(await latestApprovalId(repository, approvalId))
     if (!previous) return { ok: false, error: "Approval request not found." }
     if (previous.status !== "failed") return { ok: false, error: "Only failed posts can be retried." }
     const payload = socialPostPayloadSchema.safeParse(previous.payload)

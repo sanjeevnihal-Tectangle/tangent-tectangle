@@ -680,6 +680,21 @@ export function createSupabaseRepository(
       return approvalFromRow(updated)
     },
 
+    async getNextApprovalVersionId(id) {
+      const row = check(
+        "Load newer approval version",
+        await supabase
+          .from("approval_requests")
+          .select("id")
+          .eq("organization_id", organizationId)
+          .eq("previous_version_id", id)
+          .order("version", { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      ) as { id: string } | null
+      return row?.id ?? null
+    },
+
     async getApprovalRequest(id) {
       const row = check(
         "Load approval request",

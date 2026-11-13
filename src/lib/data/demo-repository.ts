@@ -32,6 +32,7 @@ type StoredApproval = ApprovalView & {
   payload: Record<string, unknown>
   payloadHash: string
   connectedAccountId?: string | null
+  previousVersionId?: string | null
 }
 
 interface DemoStoreData {
@@ -230,6 +231,7 @@ export function createDemoRepository(): WorkspaceRepository {
           payload: input.payload,
           payloadHash,
           connectedAccountId: input.connectedAccountId ?? null,
+          previousVersionId: input.previousVersionId ?? null,
         }
         data.approvals.unshift(stored)
         return toView(stored)
@@ -270,6 +272,9 @@ export function createDemoRepository(): WorkspaceRepository {
       })
     },
 
+    async getNextApprovalVersionId(id) {
+      return (await load()).approvals.find((a) => a.previousVersionId === id)?.id ?? null
+    },
     async getApprovalRequest(id) {
       const stored = (await load()).approvals.find((a) => a.id === id)
       if (!stored) return null

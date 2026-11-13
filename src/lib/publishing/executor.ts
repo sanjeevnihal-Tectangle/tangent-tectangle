@@ -96,21 +96,40 @@ function contentItemFor(payload: SocialPostPayload, status: "published" | "faile
   }
 }
 
+/**
+ * Retrying a failed post creates a new approval version and marks the old one
+ * superseded. Cards keep the id they were created with, so follow the chain
+ * to the version that is current now.
+ */
+export async function latestApprovalId(repository: WorkspaceRepository, approvalId: string): Promise<string> {
+  let id = approvalId
+  for (let hop = 0; hop < 10; hop += 1) {
+    const request = await repository.getApprovalRequest(id)
+    if (!request || request.status !== "superseded") return id
+    const next = await repository.getNextApprovalVersionId(id)
+    if (!next) return id
+    id = next
+  }
+  return id
+}
+
 /** Current state of approvals created by agents, with publish results when available. */
 export async function getPublishStatuses(repository: WorkspaceRepository, approvalIds: string[]): Promise<Record<string, PublishStatus>> {
   const ids = [...new Set(approvalIds)].slice(0, 20)
   if (ids.length === 0) return {}
-  const [requests, jobs] = await Promise.all([
-    Promise.all(ids.map((id) => repository.getApprovalRequest(id))),
+  const [latestIds, jobs] = await Promise.all([
+    Promise.all(ids.map((id) => latestApprovalId(repository, id))),
     repository.listPublishingJobs().catch(() => []),
   ])
+  const requests = await Promise.all(latestIds.map((id) => repository.getApprovalRequest(id)))
   const result: Record<string, PublishStatus> = {}
-  for (const request of requests) {
+  for (const [index, request] of requests.entries()) {
     if (!request) continue
     const job = jobs.find((j) => j.approvalRequestId === request.id)
     const parsed = socialPostPayloadSchema.safeParse(request.payload)
     const postId = job?.externalPostId ?? null
-    result[request.id] = {
+    // Keyed by the id the caller asked about; approvalId is the current version.
+    result[ids[index]!] = {
       approvalId: request.id,
       approvalStatus: request.status,
       externalPostId: postId,
@@ -131,7 +150,8 @@ export async function approveAndPublish(input: {
   actorId: string
   fetchImpl?: FetchLike
 }): Promise<PublishStatus> {
-  const { repository, approvalId, actorId } = input
+  const { repository, actorId } = input
+  const approvalId = await latestApprovalId(repository, input.approvalId)
   const status = (approvalStatus: PublishStatus["approvalStatus"], rest: Partial<PublishStatus> = {}): PublishStatus => ({
     approvalId,
     approvalStatus,

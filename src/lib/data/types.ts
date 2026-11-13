@@ -135,6 +135,8 @@ export interface WorkspaceRepository {
 
   /** Full approval request (with the exact payload) for executors. */
   getApprovalRequest(id: string): Promise<ApprovalRequest<Record<string, unknown>> | null>
+  /** Id of the version that replaced this approval (when it was superseded), or null. */
+  getNextApprovalVersionId(id: string): Promise<string | null>
   /**
    * Execution bookkeeping (approved → executing → executed | failed). Compare-and-set on
    * `from`, so two clicks can never execute the same approval twice. Returns false when the

@@ -244,9 +244,13 @@ export function ActionCards({ actions, assets }: { actions: RequiredAction[]; as
     setBusy((b) => ({ ...b, [approvalId]: false }))
     if (!result.ok) {
       toast.error(result.error)
+      // Show what the approval's state actually is now (e.g. replaced by a retry).
+      const fresh = await loadPublishStatuses(workspace.slug, [approvalId])
       setStatuses((s) => {
         const next = { ...s }
-        delete next[approvalId]
+        const current = fresh.ok ? fresh.data[approvalId] : undefined
+        if (current) next[approvalId] = current
+        else delete next[approvalId]
         return next
       })
       return
