@@ -391,7 +391,6 @@ function createMetaAdapter(
         }))
       }
 
-<<<<<<< HEAD
       if (id === "instagram" && /^IG/.test(tokens.accessToken.trim())) {
         // "Instagram API with Instagram Login" token: one professional account, on graph.instagram.com.
         const meUrl = new URL(`https://graph.instagram.com/${META_GRAPH_VERSION}/me`)
@@ -412,24 +411,6 @@ function createMetaAdapter(
         return [{ externalId: igId, displayName: me.username ? `@${me.username}` : igId, kind: "instagram_business" }]
       }
 
-      const url = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/me/accounts`)
-      url.searchParams.set("fields", "id,name,instagram_business_account{id,username,name}")
-      url.searchParams.set("access_token", tokens.accessToken)
-      const res = await fetch(url)
-      if (!res.ok) {
-        const err = (await res.json().catch(() => null)) as { error?: { message?: string } } | null
-        throw new IntegrationError(
-          `Could not list Meta Pages${err?.error?.message ? `: ${err.error.message}` : ""}. The token needs pages_show_list (and instagram_basic for Instagram).`,
-          "provider_error"
-        )
-      }
-      const body = (await res.json()) as {
-        data?: {
-          id: string
-          name: string
-          instagram_business_account?: { id: string; username?: string; name?: string }
-        }[]
-=======
       const { pages, errors } = await listMetaPagesForToken(tokens.accessToken)
       let accounts = pagesToExternalAccounts(pages, id)
 
@@ -437,7 +418,6 @@ function createMetaAdapter(
         const igDirect = await listBusinessInstagramAccounts(tokens.accessToken)
         accounts = igDirect.accounts
         errors.push(...igDirect.errors)
->>>>>>> ba34416 (Social Media Integrations and Whatsapp automation)
       }
 
       if (accounts.length > 0) return accounts

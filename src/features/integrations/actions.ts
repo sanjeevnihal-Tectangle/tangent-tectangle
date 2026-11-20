@@ -318,7 +318,6 @@ export async function connectIntegrationAccount(
     accessTokenCiphertext = encryptToken(accessToken, encKey, 1)
   }
 
-<<<<<<< HEAD
   let saved: ConnectedAccountView
   try {
     saved = await repository.saveConnectedAccount({
@@ -346,46 +345,15 @@ export async function connectIntegrationAccount(
     summary: `Connected ${providerId} account "${saved.displayName}" (${saved.externalAccountId})`,
     actor: { type: "user", id: context.user.id },
     metadata: {
-=======
-  try {
-    const saved = await repository.saveConnectedAccount({
->>>>>>> ba34416 (Social Media Integrations and Whatsapp automation)
       provider: providerId,
-      externalAccountId: resolvedExternalId,
-      displayName: resolvedName,
-      scopes,
-      status: "active",
-      tokenExpiresAt: null,
-      lastError: null,
-      accessTokenCiphertext,
-      refreshTokenCiphertext: null,
-      keyVersion: 1,
-      dailySpendLimitInr: dailySpendLimitInr ?? null,
-      monthlySpendLimitInr: monthlySpendLimitInr ?? null,
-    })
+      externalAccountId: saved.externalAccountId,
+      verifiedLive: Boolean(verifyWithApi && accessToken),
+      hasEncryptedToken: Boolean(accessTokenCiphertext),
+    },
+  })
 
-    await repository.recordAudit({
-      action: "integration.account_connected",
-      entityType: "connected_account",
-      entityId: saved.id,
-      summary: `Connected ${providerId} account "${saved.displayName}" (${saved.externalAccountId})`,
-      actor: { type: "user", id: context.user.id },
-      metadata: {
-        provider: providerId,
-        externalAccountId: saved.externalAccountId,
-        verifiedLive: Boolean(verifyWithApi && accessToken),
-        hasEncryptedToken: Boolean(accessTokenCiphertext),
-      },
-    })
-
-    revalidateIntegrationPaths(context.workspace.slug)
-    return { ok: true, data: saved }
-  } catch (error) {
-    return {
-      ok: false,
-      error: error instanceof Error ? error.message : "Could not save the connected account and token.",
-    }
-  }
+  revalidateIntegrationPaths(context.workspace.slug)
+  return { ok: true, data: saved }
 }
 
 /** Attach or replace the encrypted access token on an existing connected account. */

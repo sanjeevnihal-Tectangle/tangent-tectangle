@@ -30,14 +30,14 @@ import {
   messageEventSchema,
   messageTemplateSchema,
   messagingSettingsSchema,
-  productSchema,
+  productSchema as businessProductSchema,
   type Audience,
   type Contact,
   type ContactImportBatch,
   type MessageBroadcast,
   type MessageEvent,
   type MessageTemplate,
-  type Product,
+  type Product as BusinessProduct,
 } from "@/lib/domain/messaging"
 import type { StoredMessage } from "@/lib/domain/conversations"
 import { creativeProjectSchema, type CreativeProject } from "@/lib/domain/creative"
@@ -982,7 +982,7 @@ export function createSupabaseRepository(
       return true
     },
 
-    async listProducts() {
+    async listBusinessProducts() {
       const result = await supabase
         .from("business_products")
         .select(
@@ -994,7 +994,7 @@ export function createSupabaseRepository(
         .limit(100)
       if (result.error) {
         if (isMissingRelation(result.error)) return []
-        throw new RepositoryError("List products", result.error)
+        throw new RepositoryError("List business products", result.error)
       }
       const rows = result.data as {
         id: string
@@ -1002,12 +1002,12 @@ export function createSupabaseRepository(
         description: string
         sku: string | null
         category: string | null
-        status: Product["status"]
+        status: BusinessProduct["status"]
         brand_profile_id: string | null
         updated_at: string
       }[]
       return rows.flatMap((row) => {
-        const parsed = productSchema.safeParse({
+        const parsed = businessProductSchema.safeParse({
           id: row.id,
           name: row.name,
           description: row.description ?? "",
@@ -1021,7 +1021,7 @@ export function createSupabaseRepository(
       })
     },
 
-    async saveProduct(product) {
+    async saveBusinessProduct(product) {
       await upsertOwned(
         "business_products",
         product.id,
@@ -1033,14 +1033,14 @@ export function createSupabaseRepository(
           status: product.status,
           brand_profile_id: product.brandProfileId,
         },
-        "Save product"
+        "Save business product"
       )
       return { ...product, updatedAt: new Date().toISOString() }
     },
 
-    async deleteProduct(id) {
+    async deleteBusinessProduct(id) {
       check(
-        "Delete product",
+        "Delete business product",
         await supabase
           .from("business_products")
           .update({ deleted_at: new Date().toISOString() })
@@ -2099,43 +2099,37 @@ export function createSupabaseRepository(
         }
         {
           if (input.accessTokenCiphertext) {
-<<<<<<< HEAD
-            const { error: credError } = await admin.rpc("store_integration_credential", {
-              p_connected_account_id: row.id,
-              p_access_token_ciphertext: input.accessTokenCiphertext,
-              p_refresh_token_ciphertext: input.refreshTokenCiphertext ?? null,
-              p_key_version: input.keyVersion ?? 1,
-=======
-            await storeCredentialCiphertext({
-              connectedAccountId: row.id,
-              accessTokenCiphertext: input.accessTokenCiphertext,
-              refreshTokenCiphertext: input.refreshTokenCiphertext ?? null,
-              keyVersion: input.keyVersion ?? 1,
-              localAccount: {
-                id: row.id,
-                organizationId,
-                provider: dbProvider,
-                externalAccountId: input.externalAccountId,
-                displayName: input.displayName,
-                scopes: input.scopes,
-                status: input.status,
-                tokenExpiresAt: input.tokenExpiresAt ?? null,
-                lastSyncedAt: now,
-                lastError: input.lastError ?? null,
-                updatedAt: now,
-              },
->>>>>>> ba34416 (Social Media Integrations and Whatsapp automation)
-            })
-            if (credError) {
+            try {
+              await storeCredentialCiphertext({
+                connectedAccountId: row.id,
+                accessTokenCiphertext: input.accessTokenCiphertext,
+                refreshTokenCiphertext: input.refreshTokenCiphertext ?? null,
+                keyVersion: input.keyVersion ?? 1,
+                localAccount: {
+                  id: row.id,
+                  organizationId,
+                  provider: dbProvider,
+                  externalAccountId: input.externalAccountId,
+                  displayName: input.displayName,
+                  scopes: input.scopes,
+                  status: input.status,
+                  tokenExpiresAt: input.tokenExpiresAt ?? null,
+                  lastSyncedAt: now,
+                  lastError: input.lastError ?? null,
+                  updatedAt: now,
+                },
+              })
+            } catch (error) {
               // Without the stored token the account can't publish, so don't show it as healthy.
-              console.error("[tangent] storing integration credential failed:", credError.message)
+              const message = error instanceof Error ? error.message : "credential store failed"
+              console.error("[tangent] storing integration credential failed:", message)
               await admin
                 .from("connected_accounts")
                 .update({ status: "error", last_error: "The access token could not be stored in the credential vault. Reconnect the account." })
                 .eq("organization_id", organizationId)
                 .eq("id", row.id)
               throw new RepositoryError("Store access token", {
-                message: `${credError.message}. Run the latest Supabase migration (store_integration_credential), then reconnect.`,
+                message: `${message}. Run the latest Supabase migration (store_integration_credential), then reconnect.`,
               })
             }
           }

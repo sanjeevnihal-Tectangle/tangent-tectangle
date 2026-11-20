@@ -1,8 +1,4 @@
-<<<<<<< HEAD
 import type { ApprovalRequest, ApprovalStatus, ExternalActionType, FinancialImpact } from "@/lib/approvals/engine"
-=======
-import type { ApprovalStatus, ExternalActionType, FinancialImpact } from "@/lib/approvals/engine"
->>>>>>> ba34416 (Social Media Integrations and Whatsapp automation)
 import type { Role } from "@/lib/auth/permissions"
 import type { AdAccountView } from "@/lib/domain/ads"
 import type { AnalyticsEventRecord } from "@/lib/domain/analytics"
@@ -23,7 +19,7 @@ import type {
   MessageEvent,
   MessageTemplate,
   MessagingSettings,
-  Product,
+  Product as BusinessProduct,
 } from "@/lib/domain/messaging"
 import type { CreativeProject, CreativeProjectSummary } from "@/lib/domain/creative"
 import type { MediaAsset, NewMediaAsset } from "@/lib/domain/media"
@@ -181,9 +177,10 @@ export interface WorkspaceRepository {
 
   /** False when messaging migrations have not been applied yet. */
   messagingSchemaReady(): Promise<boolean>
-  listProducts(): Promise<Product[]>
-  saveProduct(product: Product): Promise<Product>
-  deleteProduct(id: string): Promise<void>
+  /** Messaging catalogue (`business_products`), distinct from brand-kit `listProducts`. */
+  listBusinessProducts(): Promise<BusinessProduct[]>
+  saveBusinessProduct(product: BusinessProduct): Promise<BusinessProduct>
+  deleteBusinessProduct(id: string): Promise<void>
 
   listContacts(options?: { limit?: number }): Promise<Contact[]>
   saveContact(contact: Contact): Promise<Contact>

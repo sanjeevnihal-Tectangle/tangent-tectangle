@@ -25,7 +25,7 @@ import {
   type MessageEvent,
   type MessageTemplate,
   type MessagingSettings,
-  type Product,
+  type Product as BusinessProduct,
 } from "@/lib/domain/messaging"
 import { DEMO_APPROVALS, DEMO_CONVERSATIONS } from "@/lib/demo/seed-ai"
 import { DEMO_MEMBERS } from "@/lib/demo/workspace"
@@ -59,6 +59,7 @@ interface DemoStoreData {
   approvals: StoredApproval[]
   campaigns?: Campaign[]
   products?: Product[]
+  businessProducts?: BusinessProduct[]
   contacts?: Contact[]
   audiences?: Audience[]
   contactImportBatches?: ContactImportBatch[]
@@ -72,7 +73,6 @@ interface DemoStoreData {
   audit: AuditRecord[]
   runs?: AgentRunLog[]
   creativeProjects?: CreativeProject[]
-  products?: Product[]
   contentItems?: ContentItem[]
   usage: { key: string; quantity: number; at: string }[]
 }
@@ -389,20 +389,20 @@ export function createDemoRepository(): WorkspaceRepository {
       return true
     },
 
-    async listProducts() {
-      const { products = [] } = await load()
-      return [...products].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    async listBusinessProducts() {
+      const { businessProducts = [] } = await load()
+      return [...businessProducts].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     },
-    async saveProduct(product) {
+    async saveBusinessProduct(product) {
       return mutate((data) => {
         const saved = { ...product, updatedAt: new Date().toISOString() }
-        data.products = [saved, ...(data.products ?? []).filter((p) => p.id !== product.id)]
+        data.businessProducts = [saved, ...(data.businessProducts ?? []).filter((p) => p.id !== product.id)]
         return saved
       })
     },
-    async deleteProduct(id) {
+    async deleteBusinessProduct(id) {
       await mutate((data) => {
-        data.products = (data.products ?? []).filter((p) => p.id !== id)
+        data.businessProducts = (data.businessProducts ?? []).filter((p) => p.id !== id)
       })
     },
 

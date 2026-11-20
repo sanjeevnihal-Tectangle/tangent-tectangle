@@ -23,7 +23,7 @@ async function MessagingLoader({
 
   const schemaReady = await repository.messagingSchemaReady()
 
-  let products = schemaReady ? await repository.listProducts() : []
+  let products = schemaReady ? await repository.listBusinessProducts() : []
   if (schemaReady && products.length === 0 && context.permissions.includes("campaigns.manage")) {
     const seeded = await seedProductsFromBusinessQuiet(orgSlug)
     if (seeded.ok) products = seeded.data
@@ -35,7 +35,7 @@ async function MessagingLoader({
     const seeded: typeof products = []
     for (const name of names) {
       seeded.push(
-        await repository.saveProduct({
+        await repository.saveBusinessProduct({
           ...emptyProduct(crypto.randomUUID()),
           name,
           description: "Demo product from business profile",

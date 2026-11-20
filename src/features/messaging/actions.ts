@@ -87,7 +87,7 @@ export async function seedProductsFromBusinessQuiet(
   if (!gate.ok) return gate
   const { repository } = gate
 
-  const existing = await repository.listProducts()
+  const existing = await repository.listBusinessProducts()
   if (existing.length > 0) return { ok: true, data: existing }
 
   const business = await repository.getBusinessProfile()
@@ -100,7 +100,7 @@ export async function seedProductsFromBusinessQuiet(
       const product = emptyProduct(crypto.randomUUID())
       product.name = name
       product.description = `Imported from business profile`
-      created.push(await repository.saveProduct(product))
+      created.push(await repository.saveBusinessProduct(product))
     } catch (error) {
       console.error("[tangent] seed product failed", error)
       return {
@@ -158,7 +158,7 @@ export async function saveProductAction(
   if (!parsed.success) {
     return { ok: false, error: "Check the highlighted fields.", fieldErrors: fieldErrorsFromZod(parsed.error) }
   }
-  const saved = await gate.repository.saveProduct(parsed.data)
+  const saved = await gate.repository.saveBusinessProduct(parsed.data)
   await gate.repository.recordAudit({
     action: "messaging.product_saved",
     entityType: "product",
@@ -176,7 +176,7 @@ export async function deleteProductAction(
 ): Promise<MessagingResult<{ id: string }>> {
   const gate = await requireMessagingManage(workspace)
   if (!gate.ok) return gate
-  await gate.repository.deleteProduct(id)
+  await gate.repository.deleteBusinessProduct(id)
   revalidateMessaging(gate.context.workspace.slug)
   return { ok: true, data: { id } }
 }
@@ -1598,7 +1598,7 @@ export async function enableInstagramLiveInboxAction(
         verifyTokenHint,
         subscribed: false,
         mode: "poll",
-        detail: subscribed.error,
+        detail: subscribed.ok ? undefined : subscribed.error,
       },
     }
   }
