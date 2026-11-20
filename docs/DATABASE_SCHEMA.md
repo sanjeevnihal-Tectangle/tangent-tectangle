@@ -12,6 +12,9 @@ PostgreSQL on Supabase. Migrations live in `supabase/migrations/` and are applie
 | `…000600_billing_usage` | `plans`, `plan_entitlements`, `subscriptions`, `usage_records`, `record_usage()` |
 | `…000700_invitation_acceptance` | `accept_invitation()` |
 | `20261111000100_creative_studio_planner` | `creative_projects`, private `media` storage bucket + policies, media asset names/tags, brand logo → media asset, content approval policy, `content_items.creative_project_id` / `review_note` |
+| `20261119000100_messaging` | `business_products`, `contacts`, `audiences`, `audience_members`, `contact_import_batches`, `message_templates`; adds `whatsapp` / `meta_ads` to `integration_provider` |
+| `20261119000200_messaging_broadcasts` | `message_broadcasts`, `message_events` (M2 bulk send) |
+| `20261119000300_messaging_automations` | `message_automations`, `messaging_settings`, messaging plan entitlements |
 
 ### Creative Studio and planning (Phase 3/4)
 - `creative_projects` — design `document` (jsonb, validated by `designDocumentSchema`: pages → background + layers in native pixels), `brief` (objective, concept, AI design spec, template), format/platform, draft/final, soft delete.

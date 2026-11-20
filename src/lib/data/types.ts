@@ -8,6 +8,19 @@ import type { Product } from "@/lib/domain/product"
 import type { BusinessProfile, MarketingIntelligence } from "@/lib/domain/business"
 import type { Campaign } from "@/lib/domain/campaigns"
 import type { ContentItem } from "@/lib/domain/content"
+import type {
+  Audience,
+  Contact,
+  ContactImportBatch,
+  ConversationMessage,
+  ConversationThread,
+  MessageAutomation,
+  MessageBroadcast,
+  MessageEvent,
+  MessageTemplate,
+  MessagingSettings,
+  Product as BusinessProduct,
+} from "@/lib/domain/messaging"
 import type { CreativeProject, CreativeProjectSummary } from "@/lib/domain/creative"
 import type { MediaAsset, NewMediaAsset } from "@/lib/domain/media"
 import type { ConnectedAccountView, PublishingJobView } from "@/lib/domain/social"
@@ -138,6 +151,13 @@ export interface WorkspaceRepository {
     note: string | null,
     actorId: string
   ): Promise<ApprovalView>
+  /** Payload + hash for assertExecutable (not exposed in ApprovalView). */
+  getApprovalExecutable(id: string): Promise<{
+    id: string
+    status: ApprovalStatus
+    payload: Record<string, unknown>
+    payloadHash: string
+  } | null>
 
   /** Full approval request (with the exact payload) for executors. */
   getApprovalRequest(id: string): Promise<ApprovalRequest<Record<string, unknown>> | null>
@@ -154,6 +174,88 @@ export interface WorkspaceRepository {
   getCampaign(id: string): Promise<Campaign | null>
   saveCampaign(campaign: Campaign): Promise<Campaign>
   deleteCampaign(id: string): Promise<void>
+
+  /** False when messaging migrations have not been applied yet. */
+  messagingSchemaReady(): Promise<boolean>
+  /** Messaging catalogue (`business_products`), distinct from brand-kit `listProducts`. */
+  listBusinessProducts(): Promise<BusinessProduct[]>
+  saveBusinessProduct(product: BusinessProduct): Promise<BusinessProduct>
+  deleteBusinessProduct(id: string): Promise<void>
+
+  listContacts(options?: { limit?: number }): Promise<Contact[]>
+  saveContact(contact: Contact): Promise<Contact>
+  deleteContact(id: string): Promise<void>
+  upsertContacts(contacts: Contact[]): Promise<Contact[]>
+
+  listAudiences(): Promise<Audience[]>
+  saveAudience(audience: Audience): Promise<Audience>
+  deleteAudience(id: string): Promise<void>
+
+  listContactImportBatches(): Promise<ContactImportBatch[]>
+  saveContactImportBatch(batch: ContactImportBatch): Promise<ContactImportBatch>
+
+  listMessageTemplates(): Promise<MessageTemplate[]>
+  saveMessageTemplate(template: MessageTemplate): Promise<MessageTemplate>
+  deleteMessageTemplate(id: string): Promise<void>
+
+  listBroadcasts(): Promise<MessageBroadcast[]>
+  getBroadcast(id: string): Promise<MessageBroadcast | null>
+  saveBroadcast(broadcast: MessageBroadcast): Promise<MessageBroadcast>
+  deleteBroadcast(id: string): Promise<void>
+  listMessageEvents(broadcastId: string): Promise<MessageEvent[]>
+  saveMessageEvents(events: MessageEvent[]): Promise<void>
+
+  getMessagingSettings(): Promise<MessagingSettings>
+  saveMessagingSettings(settings: MessagingSettings): Promise<MessagingSettings>
+
+  listAutomations(): Promise<MessageAutomation[]>
+  saveAutomation(automation: MessageAutomation): Promise<MessageAutomation>
+  deleteAutomation(id: string): Promise<void>
+
+  listConversationThreads(options?: { limit?: number }): Promise<ConversationThread[]>
+  listConversationMessages(threadId: string): Promise<ConversationMessage[]>
+  markConversationThreadRead(threadId: string): Promise<ConversationThread | null>
+  saveConversationOutbound(input: {
+    threadId: string
+    body: string
+    providerMessageId: string | null
+    senderKind: "user" | "agent" | "auto"
+  }): Promise<ConversationMessage | null>
+  upsertConversationThread(input: {
+    channel: ConversationThread["channel"]
+    connectedAccountId: string | null
+    contactId: string | null
+    externalThreadKey: string
+    participantHandle: string
+    participantName: string
+    status: ConversationThread["status"]
+    lastMessageAt: string | null
+    lastMessagePreview: string
+    lastInboundAt: string | null
+    unreadCountDelta?: number
+    aiSummary?: string | null
+    metadata?: Record<string, unknown>
+  }): Promise<ConversationThread>
+  upsertConversationMessage(input: {
+    threadId: string
+    direction: ConversationMessage["direction"]
+    senderKind: ConversationMessage["senderKind"]
+    body: string
+    contentType: string
+    providerMessageId: string | null
+    status: string
+    occurredAt: string
+    metadata?: Record<string, unknown>
+  }): Promise<ConversationMessage | null>
+  updateConversationMessageAi(
+    messageId: string,
+    patch: Partial<
+      Pick<
+        ConversationMessage,
+        "aiIntent" | "aiSentiment" | "aiConfidence" | "aiDraftReply" | "aiShouldAutoReply"
+      >
+    >
+  ): Promise<void>
 
   listConnectedAccounts(): Promise<ConnectedAccountView[]>
   saveConnectedAccount(input: SaveConnectedAccountInput): Promise<ConnectedAccountView>

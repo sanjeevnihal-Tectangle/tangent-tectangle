@@ -3,6 +3,7 @@ import {
   Clapperboard,
   Compass,
   Fingerprint,
+  MessageSquareText,
   MousePointerClick,
   Palette,
   PenLine,
@@ -27,6 +28,7 @@ const AGENT_ICONS: Record<ActiveAgentId, typeof Compass> = {
   performance_marketer: MousePointerClick,
   growth_marketer: Rocket,
   marketing_analyst: ChartLine,
+  messaging_specialist: MessageSquareText,
 }
 
 export function AgentAvatar({ agentId, className }: { agentId: ActiveAgentId; className?: string }) {

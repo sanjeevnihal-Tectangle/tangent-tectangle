@@ -40,7 +40,7 @@ Status as of the first implementation slice. ✅ done · 🟡 partial · ⬜ not
 | Carousel pages, resize to another format, AI variations | ✅ | |
 | PNG export (native resolution, client-side) | ✅ | html-to-image |
 | Asset Library (private Supabase Storage, signed URLs) + picker; brand logo from library | ✅ | |
-| AI image generation (OpenAI gpt-image) | 🟡 | Implemented behind `IMAGE_PROVIDER=openai`; untested live — OpenAI account has no credits |
+| AI image generation (OpenAI gpt-image-2) | ✅ | `IMAGE_PROVIDER=openai`, `IMAGE_MODEL=gpt-image-2`; provider verified (square + landscape, ~30–40 s per image). Upload into Storage via the Studio still to be clicked through live |
 | Copy Studio | ✅ | |
 | Video Studio (Reels/Shorts generation, FFmpeg) | ⬜ | Needs a video provider |
 | Brand Strategist / Video Creator agents | ⬜ | |
@@ -57,6 +57,20 @@ Status as of the first implementation slice. ✅ done · 🟡 partial · ⬜ not
 | Scheduling → approval request → publishing jobs (BullMQ/Redis) | ⬜ | Schedule button explains connection requirement |
 | Social Media Manager agent | ⬜ | |
 
+## Phase 4.5 — Messaging & WhatsApp Marketing
+
+See `docs/MESSAGING_WHATSAPP.md`. Depends on Meta app credentials + Approval Engine (`send_marketing_message`) + job workers.
+
+| Item | Status | Notes |
+| --- | --- | --- |
+| First-class products catalog (from `productsAndServices` strings) | ✅ | Messaging module + migration `…19000100_messaging` |
+| Contacts, audiences, CSV import, E.164 + consent | ✅ | Import batches require human accept; scrape source supported |
+| WhatsApp Cloud API adapter + OAuth / token connect | ✅ | `whatsapp` provider + adapter; Embedded Signup still optional |
+| Template draft / sync / submit to Meta | ✅ | Templates tab in Messaging |
+| Bulk broadcast → approval → send + message_events | ✅ | M2 — in-process Graph send after `assertExecutable`; BullMQ next |
+| Scheduled automations + opt-out / quiet hours | ✅ | M3 — schedules/events, settings, entitlements, STOP webhook |
+| SMS (MSG91/DLT) + email (Resend) + Messaging agent | ✅ | M4 — channel-aware execute, Direct Connect, `messaging_specialist` |
+
 ## Phase 5 — Marketing Intelligence
 SEO Studio (+ Search Console), Analytics & Insights with real sources, Campaign Manager, Ads Manager (Meta/Google, spend limits),
 competitor intelligence, remaining agents (Market Research, SEO, Performance, Growth, Analyst), LangGraph runtime if branching is needed.
@@ -66,7 +80,7 @@ Razorpay subscriptions + webhooks, usage management UI, Sentry + structured logg
 
 ## Immediate next steps
 
-1. Add OpenAI credits and set `IMAGE_PROVIDER=openai` to enable AI image generation (then verify end to end).
+1. Click through AI image generation in the Studio (generate → saved to Asset Library → used as background).
 2. Create a Meta developer app and Google OAuth client; build the Instagram/Facebook/YouTube adapters and the scheduling → publishing pipeline.
 3. Install the official logo.
 4. Playwright smoke tests: onboarding, brand save, template → editor → export, planner workflow, streamed Command Centre run (mocked provider).

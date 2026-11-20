@@ -30,10 +30,11 @@ provider-agnostic AI and integrations, configurable plans).
 | — | Asset Library | ✅ Built (private uploads, AI-image history, search, picker everywhere) |
 | 07 | Social Media Management | Phase 4 |
 | 08 | Campaign Manager | Phase 5 |
+| — | Messaging | ✅ M0–M4 — products, audiences, WhatsApp/SMS/email, approval-gated bulk send, automations, Messaging agent (`docs/MESSAGING_WHATSAPP.md`) |
 | 09 | SEO Studio | Phase 5 |
 | 10 | Ads Manager | Phase 5 |
 | 11 | Analytics & Insights | Phase 5 |
-| 12 | Integrations | ✅ Gateway contract + honest status; connectors ship per phase |
+| 12 | Integrations | ✅ Gateway contract + honest status; connectors ship per phase; WhatsApp adapter planned with Messaging |
 | 13 | AI Agent Management | ✅ Registry view (11 agents, 3 active) |
 | 14 | Workspace & Settings | ✅ Auth, workspaces, roles, invitations, plan & usage, audit history |
 

@@ -14,6 +14,7 @@ import type {
   AnalyticsOutput,
   CopyOutput,
   CreativeOutput,
+  MessagingOutput,
   ResearchOutput,
   SeoOutput,
   StrategyOutput,
@@ -429,6 +430,72 @@ function VideoView({ data }: { data: VideoOutput }) {
   )
 }
 
+function MessagingView({ data }: { data: MessagingOutput }) {
+  return (
+    <div className="space-y-4 text-sm">
+      <p>{data.summary}</p>
+      <div className="space-y-2">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Channels</p>
+        <ul className="space-y-1.5">
+          {data.channelPlan.map((c) => (
+            <li key={c.channel} className="rounded-md border px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="muted">{c.channel}</Badge>
+                <span className="font-medium">{c.role}</span>
+              </div>
+              <p className="mt-1 text-muted-foreground">{c.rationale}</p>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div className="space-y-2">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Template drafts</p>
+        <ul className="space-y-2">
+          {data.templateDrafts.map((t) => (
+            <li key={`${t.channel}-${t.name}`} className="rounded-md border px-3 py-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="muted">{t.channel}</Badge>
+                <Badge variant="muted">{t.category}</Badge>
+                <span className="font-mono text-xs">{t.name}</span>
+                <CopyButton
+                  text={`${t.subjectOrHeader}\n\n${t.body}`}
+                  label="Copy body"
+                />
+              </div>
+              {t.subjectOrHeader ? (
+                <p className="mt-1 text-xs font-medium">{t.subjectOrHeader}</p>
+              ) : null}
+              <p className="mt-1 whitespace-pre-wrap">{t.body}</p>
+              {t.variables.length > 0 ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Vars: {t.variables.join(", ")}
+                </p>
+              ) : null}
+              <p className="mt-1 text-xs text-muted-foreground">{t.complianceNotes}</p>
+            </li>
+          ))}
+        </ul>
+      </div>
+      <div className="space-y-1">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Audience hints</p>
+        <ul className="list-inside list-disc text-muted-foreground">
+          {data.audienceHints.map((hint) => (
+            <li key={hint}>{hint}</li>
+          ))}
+        </ul>
+      </div>
+      <div className="space-y-1">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Next steps</p>
+        <ol className="list-inside list-decimal">
+          {data.nextSteps.map((step) => (
+            <li key={step}>{step}</li>
+          ))}
+        </ol>
+      </div>
+    </div>
+  )
+}
+
 export function AgentOutputView({ output }: { output: AgentOutput }) {
   switch (output.kind) {
     case "strategy":
@@ -447,6 +514,8 @@ export function AgentOutputView({ output }: { output: AgentOutput }) {
       return <AnalyticsView data={output.data} />
     case "video":
       return <VideoView data={output.data} />
+    case "messaging":
+      return <MessagingView data={output.data} />
     default: {
       const unreachable: never = output
       return unreachable

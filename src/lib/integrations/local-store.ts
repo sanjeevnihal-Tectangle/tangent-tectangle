@@ -176,6 +176,17 @@ export function listLocalAdAccounts(organizationId: string): AdAccountView[] {
     .map(({ organizationId: _org, ...view }) => view)
 }
 
+export function getLocalCredentialCiphertext(
+  organizationId: string,
+  connectedAccountId: string
+): string | null {
+  const store = readStore()
+  const account = store.connectedAccounts.find(
+    (a) => a.organizationId === organizationId && a.id === connectedAccountId
+  )
+  return account?.accessTokenCiphertext ?? null
+}
+
 export function updateLocalAdAccountLimits(
   organizationId: string,
   adAccountId: string,
