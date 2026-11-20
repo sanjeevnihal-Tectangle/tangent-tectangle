@@ -16,6 +16,7 @@ export const EXTERNAL_ACTION_TYPES = [
   "increase_budget",
   "change_targeting",
   "send_marketing_message",
+  "send_session_message",
   "delete_published_content",
 ] as const
 export type ExternalActionType = (typeof EXTERNAL_ACTION_TYPES)[number]
@@ -27,6 +28,7 @@ export const EXTERNAL_ACTION_LABELS: Record<ExternalActionType, string> = {
   increase_budget: "Increase budget",
   change_targeting: "Change campaign targeting",
   send_marketing_message: "Send marketing message",
+  send_session_message: "Send session reply",
   delete_published_content: "Delete published content",
 }
 

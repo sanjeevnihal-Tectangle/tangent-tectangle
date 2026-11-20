@@ -1,8 +1,16 @@
-export type IntegrationCategory = "ai" | "social" | "advertising" | "search" | "automation" | "payments"
+export type IntegrationCategory =
+  | "ai"
+  | "social"
+  | "messaging"
+  | "advertising"
+  | "search"
+  | "automation"
+  | "payments"
 
 export const CATEGORY_LABELS: Record<IntegrationCategory, string> = {
   ai: "AI providers",
   social: "Social media",
+  messaging: "Messaging",
   advertising: "Advertising",
   search: "Search & analytics",
   automation: "Automation",
@@ -26,8 +34,11 @@ export interface IntegrationProviderInfo {
 export const INTEGRATION_PROVIDERS: IntegrationProviderInfo[] = [
   { id: "openai", name: "OpenAI", category: "ai", description: "GPT models for every agent, with structured outputs. Fails over to Anthropic.", capabilities: ["Agent reasoning", "Structured outputs", "Image generation (Phase 3)"], envVars: ["OPENAI_API_KEY"], connectorPhase: 2, serverOnly: true },
   { id: "anthropic", name: "Anthropic", category: "ai", description: "Claude models for every agent, with structured outputs. Fails over to OpenAI.", capabilities: ["Agent reasoning", "Structured outputs"], envVars: ["ANTHROPIC_API_KEY"], connectorPhase: 2, serverOnly: true },
-  { id: "instagram", name: "Instagram", category: "social", description: "Publish posts, reels and stories; read insights (via Meta).", capabilities: ["Publishing", "Scheduling", "Insights"], envVars: ["META_APP_ID", "META_APP_SECRET"], connectorPhase: 4, serverOnly: false },
+  { id: "instagram", name: "Instagram", category: "social", description: "Publish posts, reels and stories; sync DMs & comments into Messaging Inbox.", capabilities: ["Publishing", "Scheduling", "Insights", "Inbox"], envVars: ["META_APP_ID", "META_APP_SECRET"], connectorPhase: 4, serverOnly: false },
   { id: "facebook", name: "Facebook Pages", category: "social", description: "Manage pages, publish posts and read page insights.", capabilities: ["Publishing", "Scheduling", "Insights"], envVars: ["META_APP_ID", "META_APP_SECRET"], connectorPhase: 4, serverOnly: false },
+  { id: "whatsapp", name: "WhatsApp Business", category: "messaging", description: "Connect a WhatsApp Business Account, sync Meta templates, and send approval-gated marketing messages.", capabilities: ["WABA connect", "Template sync", "Template submit", "Bulk send"], envVars: ["META_APP_ID", "META_APP_SECRET"], connectorPhase: 4, serverOnly: false },
+  { id: "msg91", name: "MSG91 SMS", category: "messaging", description: "India-first SMS via MSG91 with DLT Flow templates. Direct-connect Authkey; approval-gated bulk send.", capabilities: ["DLT Flow send", "Plain SMS", "Balance verify"], envVars: ["MSG91_AUTH_KEY"], connectorPhase: 4, serverOnly: false },
+  { id: "resend", name: "Resend Email", category: "messaging", description: "Transactional and marketing email via Resend. Direct-connect API key; approval-gated bulk send.", capabilities: ["Email send", "Domain verify"], envVars: ["RESEND_API_KEY"], connectorPhase: 4, serverOnly: false },
   { id: "youtube", name: "YouTube", category: "social", description: "Upload Shorts and videos; read channel analytics.", capabilities: ["Uploads", "Channel analytics"], envVars: ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"], connectorPhase: 4, serverOnly: false },
   { id: "linkedin", name: "LinkedIn", category: "social", description: "Company page publishing and analytics.", capabilities: ["Publishing", "Analytics"], envVars: ["LINKEDIN_CLIENT_ID", "LINKEDIN_CLIENT_SECRET"], connectorPhase: 6, serverOnly: false },
   { id: "tiktok", name: "TikTok", category: "social", description: "Video publishing and creator analytics.", capabilities: ["Publishing", "Analytics"], envVars: ["TIKTOK_CLIENT_KEY", "TIKTOK_CLIENT_SECRET"], connectorPhase: 6, serverOnly: false },

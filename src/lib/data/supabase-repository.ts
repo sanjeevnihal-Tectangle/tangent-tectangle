@@ -18,12 +18,34 @@ import {
 } from "@/lib/domain/business"
 import { campaignSchema, type Campaign } from "@/lib/domain/campaigns"
 import { contentItemSchema, type ContentItem } from "@/lib/domain/content"
+import {
+  audienceSchema,
+  contactImportBatchSchema,
+  contactSchema,
+  conversationMessageSchema,
+  conversationThreadSchema,
+  defaultMessagingSettings,
+  messageAutomationSchema,
+  messageBroadcastSchema,
+  messageEventSchema,
+  messageTemplateSchema,
+  messagingSettingsSchema,
+  productSchema,
+  type Audience,
+  type Contact,
+  type ContactImportBatch,
+  type MessageBroadcast,
+  type MessageEvent,
+  type MessageTemplate,
+  type Product,
+} from "@/lib/domain/messaging"
 import type { StoredMessage } from "@/lib/domain/conversations"
 import { creativeProjectSchema, type CreativeProject } from "@/lib/domain/creative"
 import { extensionFor, type MediaAsset } from "@/lib/domain/media"
 import type { ConnectedAccountView, ConnectionStatus, PublishingJobStatus, PublishingJobView } from "@/lib/domain/social"
 import { publicEnv } from "@/lib/env/public"
 import { serverEnv } from "@/lib/env/server"
+import { storeCredentialCiphertext } from "@/lib/integrations/credential-store"
 import {
   getLocalConnectedAccountCredential,
   listLocalAdAccounts,
@@ -43,6 +65,15 @@ class RepositoryError extends Error {
 function check<T>(operation: string, result: { data: T; error: { message: string } | null }): T {
   if (result.error) throw new RepositoryError(operation, result.error)
   return result.data
+}
+
+function isMissingRelation(error: { message: string } | null | undefined): boolean {
+  if (!error?.message) return false
+  return (
+    error.message.includes("schema cache") ||
+    error.message.includes("does not exist") ||
+    error.message.includes("Could not find the table")
+  )
 }
 
 interface BrandRow {
@@ -688,6 +719,30 @@ export function createSupabaseRepository(
       return rows.map(approvalFromRow)
     },
 
+    async getApprovalExecutable(id) {
+      const row = check(
+        "Load approval executable",
+        await supabase
+          .from("approval_requests")
+          .select("id, status, payload, payload_hash")
+          .eq("organization_id", organizationId)
+          .eq("id", id)
+          .maybeSingle()
+      ) as {
+        id: string
+        status: ApprovalStatus
+        payload: Record<string, unknown>
+        payload_hash: string
+      } | null
+      if (!row) return null
+      return {
+        id: row.id,
+        status: row.status,
+        payload: row.payload,
+        payloadHash: row.payload_hash,
+      }
+    },
+
     async createApprovalRequest(input) {
       let version = 1
       if (input.previousVersionId) {
@@ -920,6 +975,1045 @@ export function createSupabaseRepository(
       )
     },
 
+    async messagingSchemaReady() {
+      const result = await supabase.from("business_products").select("id").limit(1)
+      if (result.error && isMissingRelation(result.error)) return false
+      if (result.error) throw new RepositoryError("Check messaging schema", result.error)
+      return true
+    },
+
+    async listProducts() {
+      const result = await supabase
+        .from("business_products")
+        .select(
+          "id, name, description, sku, category, status, brand_profile_id, updated_at"
+        )
+        .eq("organization_id", organizationId)
+        .is("deleted_at", null)
+        .order("updated_at", { ascending: false })
+        .limit(100)
+      if (result.error) {
+        if (isMissingRelation(result.error)) return []
+        throw new RepositoryError("List products", result.error)
+      }
+      const rows = result.data as {
+        id: string
+        name: string
+        description: string
+        sku: string | null
+        category: string | null
+        status: Product["status"]
+        brand_profile_id: string | null
+        updated_at: string
+      }[]
+      return rows.flatMap((row) => {
+        const parsed = productSchema.safeParse({
+          id: row.id,
+          name: row.name,
+          description: row.description ?? "",
+          sku: row.sku,
+          category: row.category,
+          status: row.status,
+          brandProfileId: row.brand_profile_id,
+          updatedAt: row.updated_at,
+        })
+        return parsed.success ? [parsed.data] : []
+      })
+    },
+
+    async saveProduct(product) {
+      await upsertOwned(
+        "business_products",
+        product.id,
+        {
+          name: product.name,
+          description: product.description,
+          sku: product.sku,
+          category: product.category,
+          status: product.status,
+          brand_profile_id: product.brandProfileId,
+        },
+        "Save product"
+      )
+      return { ...product, updatedAt: new Date().toISOString() }
+    },
+
+    async deleteProduct(id) {
+      check(
+        "Delete product",
+        await supabase
+          .from("business_products")
+          .update({ deleted_at: new Date().toISOString() })
+          .eq("organization_id", organizationId)
+          .eq("id", id)
+      )
+    },
+
+    async listContacts(options) {
+      const limit = options?.limit ?? 500
+      const result = await supabase
+        .from("contacts")
+        .select(
+          "id, phone_e164, email, name, source, consent_whatsapp, consent_whatsapp_at, consent_whatsapp_evidence, consent_sms, consent_email, attributes, product_interest_ids, opted_out_at, blocked_at, updated_at"
+        )
+        .eq("organization_id", organizationId)
+        .is("deleted_at", null)
+        .order("updated_at", { ascending: false })
+        .limit(limit)
+      if (result.error) {
+        if (isMissingRelation(result.error)) return []
+        throw new RepositoryError("List contacts", result.error)
+      }
+      const rows = result.data as Record<string, unknown>[]
+      return rows.flatMap((row) => {
+        const parsed = contactSchema.safeParse({
+          id: row.id,
+          phoneE164: row.phone_e164,
+          email: row.email ?? "",
+          name: row.name ?? "",
+          source: row.source,
+          consentWhatsapp: row.consent_whatsapp,
+          consentWhatsappAt: row.consent_whatsapp_at,
+          consentWhatsappEvidence: row.consent_whatsapp_evidence,
+          consentSms: row.consent_sms,
+          consentEmail: row.consent_email,
+          attributes: row.attributes ?? {},
+          productInterestIds: row.product_interest_ids ?? [],
+          optedOutAt: row.opted_out_at,
+          blockedAt: row.blocked_at,
+          updatedAt: row.updated_at,
+        })
+        return parsed.success ? [parsed.data] : []
+      })
+    },
+
+    async saveContact(contact) {
+      await upsertOwned(
+        "contacts",
+        contact.id,
+        {
+          phone_e164: contact.phoneE164,
+          email: contact.email || null,
+          name: contact.name,
+          source: contact.source,
+          consent_whatsapp: contact.consentWhatsapp,
+          consent_whatsapp_at: contact.consentWhatsappAt,
+          consent_whatsapp_evidence: contact.consentWhatsappEvidence,
+          consent_sms: contact.consentSms,
+          consent_email: contact.consentEmail,
+          attributes: contact.attributes,
+          product_interest_ids: contact.productInterestIds,
+          opted_out_at: contact.optedOutAt,
+          blocked_at: contact.blockedAt,
+        },
+        "Save contact"
+      )
+      return { ...contact, updatedAt: new Date().toISOString() }
+    },
+
+    async deleteContact(id) {
+      check(
+        "Delete contact",
+        await supabase
+          .from("contacts")
+          .update({ deleted_at: new Date().toISOString() })
+          .eq("organization_id", organizationId)
+          .eq("id", id)
+      )
+    },
+
+    async upsertContacts(contacts) {
+      const saved: Contact[] = []
+      for (const contact of contacts) {
+        await upsertOwned(
+          "contacts",
+          contact.id,
+          {
+            phone_e164: contact.phoneE164,
+            email: contact.email || null,
+            name: contact.name,
+            source: contact.source,
+            consent_whatsapp: contact.consentWhatsapp,
+            consent_whatsapp_at: contact.consentWhatsappAt,
+            consent_whatsapp_evidence: contact.consentWhatsappEvidence,
+            consent_sms: contact.consentSms,
+            consent_email: contact.consentEmail,
+            attributes: contact.attributes,
+            product_interest_ids: contact.productInterestIds,
+            opted_out_at: contact.optedOutAt,
+            blocked_at: contact.blockedAt,
+          },
+          "Upsert contact"
+        )
+        saved.push({ ...contact, updatedAt: new Date().toISOString() })
+      }
+      return saved
+    },
+
+    async listAudiences() {
+      const result = await supabase
+        .from("audiences")
+        .select("id, name, description, product_id, estimated_size, refreshed_at, updated_at")
+        .eq("organization_id", organizationId)
+        .is("deleted_at", null)
+        .order("updated_at", { ascending: false })
+        .limit(100)
+      if (result.error) {
+        if (isMissingRelation(result.error)) return []
+        throw new RepositoryError("List audiences", result.error)
+      }
+      const rows = result.data as {
+        id: string
+        name: string
+        description: string
+        product_id: string | null
+        estimated_size: number
+        refreshed_at: string | null
+        updated_at: string
+      }[]
+
+      const audiences: Audience[] = []
+      for (const row of rows) {
+        const members = check(
+          "List audience members",
+          await supabase.from("audience_members").select("contact_id").eq("audience_id", row.id)
+        ) as { contact_id: string }[]
+        const parsed = audienceSchema.safeParse({
+          id: row.id,
+          name: row.name,
+          description: row.description ?? "",
+          productId: row.product_id,
+          memberIds: members.map((m) => m.contact_id),
+          estimatedSize: row.estimated_size,
+          refreshedAt: row.refreshed_at,
+          updatedAt: row.updated_at,
+        })
+        if (parsed.success) audiences.push(parsed.data)
+      }
+      return audiences
+    },
+
+    async saveAudience(audience) {
+      const now = new Date().toISOString()
+      await upsertOwned(
+        "audiences",
+        audience.id,
+        {
+          name: audience.name,
+          description: audience.description,
+          product_id: audience.productId,
+          estimated_size: audience.memberIds.length,
+          refreshed_at: now,
+        },
+        "Save audience"
+      )
+      check(
+        "Clear audience members",
+        await supabase.from("audience_members").delete().eq("audience_id", audience.id)
+      )
+      if (audience.memberIds.length > 0) {
+        check(
+          "Insert audience members",
+          await supabase.from("audience_members").insert(
+            audience.memberIds.map((contactId) => ({
+              audience_id: audience.id,
+              contact_id: contactId,
+            }))
+          )
+        )
+      }
+      return {
+        ...audience,
+        estimatedSize: audience.memberIds.length,
+        refreshedAt: now,
+        updatedAt: now,
+      }
+    },
+
+    async deleteAudience(id) {
+      check(
+        "Delete audience",
+        await supabase
+          .from("audiences")
+          .update({ deleted_at: new Date().toISOString() })
+          .eq("organization_id", organizationId)
+          .eq("id", id)
+      )
+    },
+
+    async listContactImportBatches() {
+      const result = await supabase
+        .from("contact_import_batches")
+        .select(
+          "id, source, filename, status, raw_rows, accepted_count, rejected_count, notes, created_at, updated_at"
+        )
+        .eq("organization_id", organizationId)
+        .order("created_at", { ascending: false })
+        .limit(50)
+      if (result.error) {
+        if (isMissingRelation(result.error)) return []
+        throw new RepositoryError("List import batches", result.error)
+      }
+      const rows = result.data as Record<string, unknown>[]
+      return rows.flatMap((row) => {
+        const parsed = contactImportBatchSchema.safeParse({
+          id: row.id,
+          source: row.source,
+          filename: row.filename,
+          status: row.status,
+          rawRows: row.raw_rows ?? [],
+          acceptedCount: row.accepted_count ?? 0,
+          rejectedCount: row.rejected_count ?? 0,
+          notes: row.notes ?? "",
+          createdAt: row.created_at,
+          updatedAt: row.updated_at,
+        })
+        return parsed.success ? [parsed.data] : []
+      })
+    },
+
+    async saveContactImportBatch(batch) {
+      const updated = check(
+        "Save import batch",
+        await supabase
+          .from("contact_import_batches")
+          .update({
+            source: batch.source,
+            filename: batch.filename,
+            status: batch.status,
+            raw_rows: batch.rawRows,
+            accepted_count: batch.acceptedCount,
+            rejected_count: batch.rejectedCount,
+            notes: batch.notes,
+          })
+          .eq("organization_id", organizationId)
+          .eq("id", batch.id)
+          .select("id")
+      ) as { id: string }[]
+      if (updated.length === 0) {
+        check(
+          "Insert import batch",
+          await supabase.from("contact_import_batches").insert({
+            id: batch.id,
+            organization_id: organizationId,
+            created_by: userId,
+            source: batch.source,
+            filename: batch.filename,
+            status: batch.status,
+            raw_rows: batch.rawRows,
+            accepted_count: batch.acceptedCount,
+            rejected_count: batch.rejectedCount,
+            notes: batch.notes,
+          })
+        )
+      }
+      return { ...batch, updatedAt: new Date().toISOString() }
+    },
+
+    async listMessageTemplates() {
+      const result = await supabase
+        .from("message_templates")
+        .select(
+          "id, channel, product_id, connected_account_id, name, language, category, body_components, status, meta_template_id, meta_namespace, rejection_reason, updated_at"
+        )
+        .eq("organization_id", organizationId)
+        .is("deleted_at", null)
+        .order("updated_at", { ascending: false })
+        .limit(200)
+      if (result.error) {
+        if (isMissingRelation(result.error)) return []
+        throw new RepositoryError("List message templates", result.error)
+      }
+      const rows = result.data as Record<string, unknown>[]
+      return rows.flatMap((row) => {
+        const parsed = messageTemplateSchema.safeParse({
+          id: row.id,
+          channel: row.channel,
+          productId: row.product_id,
+          connectedAccountId: row.connected_account_id,
+          name: row.name,
+          language: row.language,
+          category: row.category,
+          bodyComponents: row.body_components ?? { bodyText: "", variableExamples: [] },
+          status: row.status,
+          metaTemplateId: row.meta_template_id,
+          metaNamespace: row.meta_namespace,
+          rejectionReason: row.rejection_reason,
+          updatedAt: row.updated_at,
+        })
+        return parsed.success ? [parsed.data] : []
+      })
+    },
+
+    async saveMessageTemplate(template) {
+      await upsertOwned(
+        "message_templates",
+        template.id,
+        {
+          channel: template.channel,
+          product_id: template.productId,
+          connected_account_id: template.connectedAccountId,
+          name: template.name,
+          language: template.language,
+          category: template.category,
+          body_components: template.bodyComponents,
+          status: template.status,
+          meta_template_id: template.metaTemplateId,
+          meta_namespace: template.metaNamespace,
+          rejection_reason: template.rejectionReason,
+        },
+        "Save message template"
+      )
+      return { ...template, updatedAt: new Date().toISOString() }
+    },
+
+    async deleteMessageTemplate(id) {
+      check(
+        "Delete message template",
+        await supabase
+          .from("message_templates")
+          .update({ deleted_at: new Date().toISOString() })
+          .eq("organization_id", organizationId)
+          .eq("id", id)
+      )
+    },
+
+    async listBroadcasts() {
+      const result = await supabase
+        .from("message_broadcasts")
+        .select(
+          "id, name, channel, product_id, campaign_id, template_id, audience_id, connected_account_id, variable_mapping, contact_snapshot_ids, scheduled_for, status, approval_request_id, stats, last_error, updated_at"
+        )
+        .eq("organization_id", organizationId)
+        .is("deleted_at", null)
+        .order("updated_at", { ascending: false })
+        .limit(100)
+      if (result.error) {
+        if (isMissingRelation(result.error)) return []
+        throw new RepositoryError("List broadcasts", result.error)
+      }
+      return (result.data as Record<string, unknown>[]).flatMap((row) => {
+        const parsed = messageBroadcastSchema.safeParse({
+          id: row.id,
+          name: row.name,
+          channel: row.channel,
+          productId: row.product_id,
+          campaignId: row.campaign_id,
+          templateId: row.template_id,
+          audienceId: row.audience_id,
+          connectedAccountId: row.connected_account_id ?? "",
+          variableMapping: row.variable_mapping ?? {},
+          contactSnapshotIds: row.contact_snapshot_ids ?? [],
+          scheduledFor: row.scheduled_for,
+          status: row.status,
+          approvalRequestId: row.approval_request_id,
+          stats: row.stats ?? { queued: 0, sent: 0, delivered: 0, read: 0, failed: 0, skipped: 0 },
+          lastError: row.last_error,
+          updatedAt: row.updated_at,
+        })
+        return parsed.success ? [parsed.data] : []
+      })
+    },
+
+    async getBroadcast(id) {
+      const result = await supabase
+        .from("message_broadcasts")
+        .select(
+          "id, name, channel, product_id, campaign_id, template_id, audience_id, connected_account_id, variable_mapping, contact_snapshot_ids, scheduled_for, status, approval_request_id, stats, last_error, updated_at"
+        )
+        .eq("organization_id", organizationId)
+        .eq("id", id)
+        .is("deleted_at", null)
+        .maybeSingle()
+      if (result.error) {
+        if (isMissingRelation(result.error)) return null
+        throw new RepositoryError("Load broadcast", result.error)
+      }
+      if (!result.data) return null
+      const row = result.data as Record<string, unknown>
+      const parsed = messageBroadcastSchema.safeParse({
+        id: row.id,
+        name: row.name,
+        channel: row.channel,
+        productId: row.product_id,
+        campaignId: row.campaign_id,
+        templateId: row.template_id,
+        audienceId: row.audience_id,
+        connectedAccountId: row.connected_account_id ?? "",
+        variableMapping: row.variable_mapping ?? {},
+        contactSnapshotIds: row.contact_snapshot_ids ?? [],
+        scheduledFor: row.scheduled_for,
+        status: row.status,
+        approvalRequestId: row.approval_request_id,
+        stats: row.stats ?? { queued: 0, sent: 0, delivered: 0, read: 0, failed: 0, skipped: 0 },
+        lastError: row.last_error,
+        updatedAt: row.updated_at,
+      })
+      return parsed.success ? parsed.data : null
+    },
+
+    async saveBroadcast(broadcast) {
+      await upsertOwned(
+        "message_broadcasts",
+        broadcast.id,
+        {
+          name: broadcast.name,
+          channel: broadcast.channel,
+          product_id: broadcast.productId,
+          campaign_id: broadcast.campaignId,
+          template_id: broadcast.templateId,
+          audience_id: broadcast.audienceId,
+          connected_account_id: broadcast.connectedAccountId || null,
+          variable_mapping: broadcast.variableMapping,
+          contact_snapshot_ids: broadcast.contactSnapshotIds,
+          scheduled_for: broadcast.scheduledFor,
+          status: broadcast.status,
+          approval_request_id: broadcast.approvalRequestId,
+          stats: broadcast.stats,
+          last_error: broadcast.lastError,
+        },
+        "Save broadcast"
+      )
+      return { ...broadcast, updatedAt: new Date().toISOString() }
+    },
+
+    async deleteBroadcast(id) {
+      check(
+        "Delete broadcast",
+        await supabase
+          .from("message_broadcasts")
+          .update({ deleted_at: new Date().toISOString() })
+          .eq("organization_id", organizationId)
+          .eq("id", id)
+      )
+    },
+
+    async listMessageEvents(broadcastId) {
+      const result = await supabase
+        .from("message_events")
+        .select(
+          "id, broadcast_id, contact_id, provider_message_id, status, error_code, error_message, occurred_at"
+        )
+        .eq("organization_id", organizationId)
+        .eq("broadcast_id", broadcastId)
+        .order("occurred_at", { ascending: false })
+        .limit(2000)
+      if (result.error) {
+        if (isMissingRelation(result.error)) return []
+        throw new RepositoryError("List message events", result.error)
+      }
+      return (result.data as Record<string, unknown>[]).flatMap((row) => {
+        const parsed = messageEventSchema.safeParse({
+          id: row.id,
+          broadcastId: row.broadcast_id,
+          contactId: row.contact_id,
+          providerMessageId: row.provider_message_id,
+          status: row.status,
+          errorCode: row.error_code,
+          errorMessage: row.error_message,
+          occurredAt: row.occurred_at,
+        })
+        return parsed.success ? [parsed.data] : []
+      })
+    },
+
+    async saveMessageEvents(events) {
+      if (events.length === 0) return
+      check(
+        "Save message events",
+        await supabase.from("message_events").upsert(
+          events.map((event) => ({
+            id: event.id,
+            organization_id: organizationId,
+            broadcast_id: event.broadcastId,
+            contact_id: event.contactId,
+            provider_message_id: event.providerMessageId,
+            status: event.status,
+            error_code: event.errorCode,
+            error_message: event.errorMessage,
+            occurred_at: event.occurredAt,
+          })),
+          { onConflict: "id" }
+        )
+      )
+    },
+
+    async getMessagingSettings() {
+      const result = await supabase
+        .from("messaging_settings")
+        .select(
+          "quiet_hours_enabled, quiet_hours_start, quiet_hours_end, timezone, opt_out_keywords, default_language, inbox_ai_enabled, auto_reply_mode, auto_reply_connected_account_id, updated_at"
+        )
+        .eq("organization_id", organizationId)
+        .maybeSingle()
+      if (result.error) {
+        if (isMissingRelation(result.error)) return defaultMessagingSettings()
+        throw new RepositoryError("Load messaging settings", result.error)
+      }
+      if (!result.data) return defaultMessagingSettings()
+      const row = result.data as Record<string, unknown>
+      const parsed = messagingSettingsSchema.safeParse({
+        quietHoursEnabled: row.quiet_hours_enabled,
+        quietHoursStart: row.quiet_hours_start,
+        quietHoursEnd: row.quiet_hours_end,
+        timezone: row.timezone,
+        optOutKeywords: row.opt_out_keywords ?? [],
+        defaultLanguage: row.default_language,
+        inboxAiEnabled: row.inbox_ai_enabled !== false,
+        autoReplyMode: row.auto_reply_mode ?? "draft_only",
+        autoReplyConnectedAccountId: row.auto_reply_connected_account_id ?? null,
+        updatedAt: row.updated_at,
+      })
+      return parsed.success ? parsed.data : defaultMessagingSettings()
+    },
+
+    async saveMessagingSettings(settings) {
+      check(
+        "Save messaging settings",
+        await supabase.from("messaging_settings").upsert({
+          organization_id: organizationId,
+          quiet_hours_enabled: settings.quietHoursEnabled,
+          quiet_hours_start: settings.quietHoursStart,
+          quiet_hours_end: settings.quietHoursEnd,
+          timezone: settings.timezone,
+          opt_out_keywords: settings.optOutKeywords,
+          default_language: settings.defaultLanguage,
+          inbox_ai_enabled: settings.inboxAiEnabled,
+          auto_reply_mode: settings.autoReplyMode,
+          auto_reply_connected_account_id: settings.autoReplyConnectedAccountId,
+        })
+      )
+      return { ...settings, updatedAt: new Date().toISOString() }
+    },
+
+    async listConversationThreads(options) {
+      const result = await supabase
+        .from("conversation_threads")
+        .select(
+          "id, channel, connected_account_id, contact_id, external_thread_key, participant_handle, participant_name, status, unread_count, last_message_at, last_message_preview, last_inbound_at, ai_summary, updated_at"
+        )
+        .eq("organization_id", organizationId)
+        .order("last_message_at", { ascending: false, nullsFirst: false })
+        .limit(options?.limit ?? 80)
+      if (result.error) {
+        if (isMissingRelation(result.error)) return []
+        throw new RepositoryError("List conversation threads", result.error)
+      }
+      return (result.data as Record<string, unknown>[]).flatMap((row) => {
+        const parsed = conversationThreadSchema.safeParse({
+          id: row.id,
+          channel: row.channel,
+          connectedAccountId: row.connected_account_id,
+          contactId: row.contact_id,
+          externalThreadKey: row.external_thread_key,
+          participantHandle: row.participant_handle ?? "",
+          participantName: row.participant_name ?? "",
+          status: row.status,
+          unreadCount: row.unread_count ?? 0,
+          lastMessageAt: row.last_message_at,
+          lastMessagePreview: row.last_message_preview ?? "",
+          lastInboundAt: row.last_inbound_at,
+          aiSummary: row.ai_summary,
+          updatedAt: row.updated_at,
+        })
+        return parsed.success ? [parsed.data] : []
+      })
+    },
+
+    async listConversationMessages(threadId) {
+      const result = await supabase
+        .from("conversation_messages")
+        .select(
+          "id, thread_id, direction, sender_kind, body, content_type, provider_message_id, status, ai_intent, ai_sentiment, ai_confidence, ai_draft_reply, ai_should_auto_reply, occurred_at"
+        )
+        .eq("organization_id", organizationId)
+        .eq("thread_id", threadId)
+        .order("occurred_at", { ascending: true })
+        .limit(200)
+      if (result.error) {
+        if (isMissingRelation(result.error)) return []
+        throw new RepositoryError("List conversation messages", result.error)
+      }
+      return (result.data as Record<string, unknown>[]).flatMap((row) => {
+        const parsed = conversationMessageSchema.safeParse({
+          id: row.id,
+          threadId: row.thread_id,
+          direction: row.direction,
+          senderKind: row.sender_kind,
+          body: row.body ?? "",
+          contentType: row.content_type ?? "text",
+          providerMessageId: row.provider_message_id,
+          status: row.status ?? "received",
+          aiIntent: row.ai_intent,
+          aiSentiment: row.ai_sentiment,
+          aiConfidence: row.ai_confidence == null ? null : Number(row.ai_confidence),
+          aiDraftReply: row.ai_draft_reply,
+          aiShouldAutoReply: Boolean(row.ai_should_auto_reply),
+          occurredAt: row.occurred_at,
+        })
+        return parsed.success ? [parsed.data] : []
+      })
+    },
+
+    async markConversationThreadRead(threadId) {
+      const result = await supabase
+        .from("conversation_threads")
+        .update({ unread_count: 0 })
+        .eq("organization_id", organizationId)
+        .eq("id", threadId)
+        .select(
+          "id, channel, connected_account_id, contact_id, external_thread_key, participant_handle, participant_name, status, unread_count, last_message_at, last_message_preview, last_inbound_at, ai_summary, updated_at"
+        )
+        .maybeSingle()
+      if (result.error) {
+        if (isMissingRelation(result.error)) return null
+        throw new RepositoryError("Mark thread read", result.error)
+      }
+      if (!result.data) return null
+      const row = result.data as Record<string, unknown>
+      const parsed = conversationThreadSchema.safeParse({
+        id: row.id,
+        channel: row.channel,
+        connectedAccountId: row.connected_account_id,
+        contactId: row.contact_id,
+        externalThreadKey: row.external_thread_key,
+        participantHandle: row.participant_handle ?? "",
+        participantName: row.participant_name ?? "",
+        status: row.status,
+        unreadCount: row.unread_count ?? 0,
+        lastMessageAt: row.last_message_at,
+        lastMessagePreview: row.last_message_preview ?? "",
+        lastInboundAt: row.last_inbound_at,
+        aiSummary: row.ai_summary,
+        updatedAt: row.updated_at,
+      })
+      return parsed.success ? parsed.data : null
+    },
+
+    async upsertConversationThread(input) {
+      const existing = await supabase
+        .from("conversation_threads")
+        .select("id, unread_count")
+        .eq("organization_id", organizationId)
+        .eq("channel", input.channel)
+        .eq("external_thread_key", input.externalThreadKey)
+        .maybeSingle()
+      if (existing.error && !isMissingRelation(existing.error)) {
+        throw new RepositoryError("Lookup conversation thread", existing.error)
+      }
+      if (existing.error && isMissingRelation(existing.error)) {
+        throw new RepositoryError(
+          "Inbox tables missing — run 20261120000100_messaging_inbox.sql",
+          existing.error
+        )
+      }
+
+      const now = new Date().toISOString()
+      const unreadDelta = input.unreadCountDelta ?? 0
+      let row: Record<string, unknown>
+      if (existing.data) {
+        const updated = await supabase
+          .from("conversation_threads")
+          .update({
+            connected_account_id: input.connectedAccountId,
+            contact_id: input.contactId,
+            participant_handle: input.participantHandle,
+            participant_name: input.participantName,
+            status: input.status,
+            last_message_at: input.lastMessageAt,
+            last_message_preview: input.lastMessagePreview,
+            last_inbound_at: input.lastInboundAt,
+            ai_summary: input.aiSummary ?? undefined,
+            metadata: input.metadata ?? {},
+            updated_at: now,
+          })
+          .eq("id", (existing.data as { id: string }).id)
+          .select(
+            "id, channel, connected_account_id, contact_id, external_thread_key, participant_handle, participant_name, status, unread_count, last_message_at, last_message_preview, last_inbound_at, ai_summary, updated_at"
+          )
+          .single()
+        if (updated.error) throw new RepositoryError("Update conversation thread", updated.error)
+        row = updated.data as Record<string, unknown>
+      } else {
+        const inserted = await supabase
+          .from("conversation_threads")
+          .insert({
+            organization_id: organizationId,
+            channel: input.channel,
+            connected_account_id: input.connectedAccountId,
+            contact_id: input.contactId,
+            external_thread_key: input.externalThreadKey,
+            participant_handle: input.participantHandle,
+            participant_name: input.participantName,
+            status: input.status,
+            unread_count: Math.max(0, unreadDelta),
+            last_message_at: input.lastMessageAt,
+            last_message_preview: input.lastMessagePreview,
+            last_inbound_at: input.lastInboundAt,
+            ai_summary: input.aiSummary ?? null,
+            metadata: input.metadata ?? {},
+          })
+          .select(
+            "id, channel, connected_account_id, contact_id, external_thread_key, participant_handle, participant_name, status, unread_count, last_message_at, last_message_preview, last_inbound_at, ai_summary, updated_at"
+          )
+          .single()
+        if (inserted.error) throw new RepositoryError("Insert conversation thread", inserted.error)
+        row = inserted.data as Record<string, unknown>
+      }
+
+      const parsed = conversationThreadSchema.safeParse({
+        id: row.id,
+        channel: row.channel,
+        connectedAccountId: row.connected_account_id,
+        contactId: row.contact_id,
+        externalThreadKey: row.external_thread_key,
+        participantHandle: row.participant_handle ?? "",
+        participantName: row.participant_name ?? "",
+        status: row.status,
+        unreadCount: row.unread_count ?? 0,
+        lastMessageAt: row.last_message_at,
+        lastMessagePreview: row.last_message_preview ?? "",
+        lastInboundAt: row.last_inbound_at,
+        aiSummary: row.ai_summary,
+        updatedAt: row.updated_at ?? now,
+      })
+      if (!parsed.success) {
+        throw new RepositoryError("Parse conversation thread", { message: parsed.error.message })
+      }
+      return parsed.data
+    },
+
+    async upsertConversationMessage(input) {
+      if (input.providerMessageId) {
+        const existing = await supabase
+          .from("conversation_messages")
+          .select(
+            "id, thread_id, direction, sender_kind, body, content_type, provider_message_id, status, ai_intent, ai_sentiment, ai_confidence, ai_draft_reply, ai_should_auto_reply, occurred_at"
+          )
+          .eq("organization_id", organizationId)
+          .eq("provider_message_id", input.providerMessageId)
+          .maybeSingle()
+        if (existing.error && !isMissingRelation(existing.error)) {
+          throw new RepositoryError("Lookup conversation message", existing.error)
+        }
+        if (existing.data) {
+          const row = existing.data as Record<string, unknown>
+          const parsed = conversationMessageSchema.safeParse({
+            id: row.id,
+            threadId: row.thread_id,
+            direction: row.direction,
+            senderKind: row.sender_kind,
+            body: row.body ?? "",
+            contentType: row.content_type ?? "text",
+            providerMessageId: row.provider_message_id,
+            status: row.status ?? "received",
+            aiIntent: row.ai_intent,
+            aiSentiment: row.ai_sentiment,
+            aiConfidence: row.ai_confidence == null ? null : Number(row.ai_confidence),
+            aiDraftReply: row.ai_draft_reply,
+            aiShouldAutoReply: Boolean(row.ai_should_auto_reply),
+            occurredAt: row.occurred_at,
+          })
+          return parsed.success ? parsed.data : null
+        }
+      }
+
+      const insert = await supabase
+        .from("conversation_messages")
+        .insert({
+          organization_id: organizationId,
+          thread_id: input.threadId,
+          direction: input.direction,
+          sender_kind: input.senderKind,
+          body: input.body,
+          content_type: input.contentType,
+          provider_message_id: input.providerMessageId,
+          status: input.status,
+          occurred_at: input.occurredAt,
+          metadata: input.metadata ?? {},
+        })
+        .select(
+          "id, thread_id, direction, sender_kind, body, content_type, provider_message_id, status, ai_intent, ai_sentiment, ai_confidence, ai_draft_reply, ai_should_auto_reply, occurred_at"
+        )
+        .single()
+      if (insert.error) {
+        if (isMissingRelation(insert.error)) return null
+        throw new RepositoryError("Insert conversation message", insert.error)
+      }
+      const row = insert.data as Record<string, unknown>
+      const parsed = conversationMessageSchema.safeParse({
+        id: row.id,
+        threadId: row.thread_id,
+        direction: row.direction,
+        senderKind: row.sender_kind,
+        body: row.body ?? "",
+        contentType: row.content_type ?? "text",
+        providerMessageId: row.provider_message_id,
+        status: row.status ?? "received",
+        aiIntent: row.ai_intent,
+        aiSentiment: row.ai_sentiment,
+        aiConfidence: row.ai_confidence == null ? null : Number(row.ai_confidence),
+        aiDraftReply: row.ai_draft_reply,
+        aiShouldAutoReply: Boolean(row.ai_should_auto_reply),
+        occurredAt: row.occurred_at,
+      })
+      return parsed.success ? parsed.data : null
+    },
+
+    async saveConversationOutbound(input) {
+      const now = new Date().toISOString()
+      const insert = await supabase
+        .from("conversation_messages")
+        .insert({
+          organization_id: organizationId,
+          thread_id: input.threadId,
+          direction: "outbound",
+          sender_kind: input.senderKind,
+          body: input.body.trim(),
+          content_type: "text",
+          provider_message_id: input.providerMessageId,
+          status: "sent",
+          occurred_at: now,
+        })
+        .select(
+          "id, thread_id, direction, sender_kind, body, content_type, provider_message_id, status, ai_intent, ai_sentiment, ai_confidence, ai_draft_reply, ai_should_auto_reply, occurred_at"
+        )
+        .single()
+      if (insert.error) {
+        if (isMissingRelation(insert.error)) return null
+        throw new RepositoryError("Save outbound inbox message", insert.error)
+      }
+      await supabase
+        .from("conversation_threads")
+        .update({
+          last_message_at: now,
+          last_message_preview: input.body.trim().slice(0, 160),
+        })
+        .eq("organization_id", organizationId)
+        .eq("id", input.threadId)
+
+      const row = insert.data as Record<string, unknown>
+      const parsed = conversationMessageSchema.safeParse({
+        id: row.id,
+        threadId: row.thread_id,
+        direction: row.direction,
+        senderKind: row.sender_kind,
+        body: row.body ?? "",
+        contentType: row.content_type ?? "text",
+        providerMessageId: row.provider_message_id,
+        status: row.status ?? "sent",
+        aiIntent: row.ai_intent,
+        aiSentiment: row.ai_sentiment,
+        aiConfidence: row.ai_confidence == null ? null : Number(row.ai_confidence),
+        aiDraftReply: row.ai_draft_reply,
+        aiShouldAutoReply: Boolean(row.ai_should_auto_reply),
+        occurredAt: row.occurred_at,
+      })
+      return parsed.success ? parsed.data : null
+    },
+
+    async updateConversationMessageAi(messageId, patch) {
+      check(
+        "Update message AI fields",
+        await supabase
+          .from("conversation_messages")
+          .update({
+            ...(patch.aiIntent !== undefined ? { ai_intent: patch.aiIntent } : {}),
+            ...(patch.aiSentiment !== undefined ? { ai_sentiment: patch.aiSentiment } : {}),
+            ...(patch.aiConfidence !== undefined ? { ai_confidence: patch.aiConfidence } : {}),
+            ...(patch.aiDraftReply !== undefined ? { ai_draft_reply: patch.aiDraftReply } : {}),
+            ...(patch.aiShouldAutoReply !== undefined
+              ? { ai_should_auto_reply: patch.aiShouldAutoReply }
+              : {}),
+          })
+          .eq("organization_id", organizationId)
+          .eq("id", messageId)
+      )
+    },
+
+    async listAutomations() {
+      const result = await supabase
+        .from("message_automations")
+        .select(
+          "id, name, enabled, trigger_kind, schedule_preset, schedule_time, schedule_timezone, schedule_day_of_week, schedule_day_of_month, event_type, channel, product_id, template_id, audience_id, connected_account_id, variable_mapping, require_approval_each_run, last_run_at, next_run_at, last_error, updated_at"
+        )
+        .eq("organization_id", organizationId)
+        .is("deleted_at", null)
+        .order("updated_at", { ascending: false })
+        .limit(100)
+      if (result.error) {
+        if (isMissingRelation(result.error)) return []
+        throw new RepositoryError("List automations", result.error)
+      }
+      return (result.data as Record<string, unknown>[]).flatMap((row) => {
+        const parsed = messageAutomationSchema.safeParse({
+          id: row.id,
+          name: row.name,
+          enabled: row.enabled,
+          triggerKind: row.trigger_kind,
+          schedulePreset: row.schedule_preset,
+          scheduleTime: row.schedule_time,
+          scheduleTimezone: row.schedule_timezone,
+          scheduleDayOfWeek: row.schedule_day_of_week,
+          scheduleDayOfMonth: row.schedule_day_of_month,
+          eventType: row.event_type,
+          channel: row.channel,
+          productId: row.product_id,
+          templateId: row.template_id,
+          audienceId: row.audience_id,
+          connectedAccountId: row.connected_account_id ?? "",
+          variableMapping: row.variable_mapping ?? {},
+          requireApprovalEachRun: row.require_approval_each_run,
+          lastRunAt: row.last_run_at,
+          nextRunAt: row.next_run_at,
+          lastError: row.last_error,
+          updatedAt: row.updated_at,
+        })
+        return parsed.success ? [parsed.data] : []
+      })
+    },
+
+    async saveAutomation(automation) {
+      await upsertOwned(
+        "message_automations",
+        automation.id,
+        {
+          name: automation.name,
+          enabled: automation.enabled,
+          trigger_kind: automation.triggerKind,
+          schedule_preset: automation.schedulePreset,
+          schedule_time: automation.scheduleTime,
+          schedule_timezone: automation.scheduleTimezone,
+          schedule_day_of_week: automation.scheduleDayOfWeek,
+          schedule_day_of_month: automation.scheduleDayOfMonth,
+          event_type: automation.eventType,
+          channel: automation.channel,
+          product_id: automation.productId,
+          template_id: automation.templateId,
+          audience_id: automation.audienceId,
+          connected_account_id: automation.connectedAccountId || null,
+          variable_mapping: automation.variableMapping,
+          require_approval_each_run: automation.requireApprovalEachRun,
+          last_run_at: automation.lastRunAt,
+          next_run_at: automation.nextRunAt,
+          last_error: automation.lastError,
+        },
+        "Save automation"
+      )
+      return { ...automation, updatedAt: new Date().toISOString() }
+    },
+
+    async deleteAutomation(id) {
+      check(
+        "Delete automation",
+        await supabase
+          .from("message_automations")
+          .update({ deleted_at: new Date().toISOString() })
+          .eq("organization_id", organizationId)
+          .eq("id", id)
+      )
+    },
+
     async listConnectedAccounts() {
       const rows = check(
         "List connected accounts",
@@ -1005,11 +2099,32 @@ export function createSupabaseRepository(
         }
         {
           if (input.accessTokenCiphertext) {
+<<<<<<< HEAD
             const { error: credError } = await admin.rpc("store_integration_credential", {
               p_connected_account_id: row.id,
               p_access_token_ciphertext: input.accessTokenCiphertext,
               p_refresh_token_ciphertext: input.refreshTokenCiphertext ?? null,
               p_key_version: input.keyVersion ?? 1,
+=======
+            await storeCredentialCiphertext({
+              connectedAccountId: row.id,
+              accessTokenCiphertext: input.accessTokenCiphertext,
+              refreshTokenCiphertext: input.refreshTokenCiphertext ?? null,
+              keyVersion: input.keyVersion ?? 1,
+              localAccount: {
+                id: row.id,
+                organizationId,
+                provider: dbProvider,
+                externalAccountId: input.externalAccountId,
+                displayName: input.displayName,
+                scopes: input.scopes,
+                status: input.status,
+                tokenExpiresAt: input.tokenExpiresAt ?? null,
+                lastSyncedAt: now,
+                lastError: input.lastError ?? null,
+                updatedAt: now,
+              },
+>>>>>>> ba34416 (Social Media Integrations and Whatsapp automation)
             })
             if (credError) {
               // Without the stored token the account can't publish, so don't show it as healthy.

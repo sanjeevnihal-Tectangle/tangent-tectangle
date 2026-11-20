@@ -13,6 +13,20 @@ import type { Campaign } from "@/lib/domain/campaigns"
 import type { ContentItem } from "@/lib/domain/content"
 import type { Conversation } from "@/lib/domain/conversations"
 import type { CreativeProject } from "@/lib/domain/creative"
+import {
+  defaultMessagingSettings,
+  type Audience,
+  type Contact,
+  type ContactImportBatch,
+  type ConversationMessage,
+  type ConversationThread,
+  type MessageAutomation,
+  type MessageBroadcast,
+  type MessageEvent,
+  type MessageTemplate,
+  type MessagingSettings,
+  type Product,
+} from "@/lib/domain/messaging"
 import { DEMO_APPROVALS, DEMO_CONVERSATIONS } from "@/lib/demo/seed-ai"
 import { DEMO_MEMBERS } from "@/lib/demo/workspace"
 import {
@@ -44,6 +58,17 @@ interface DemoStoreData {
   conversations: Conversation[]
   approvals: StoredApproval[]
   campaigns?: Campaign[]
+  products?: Product[]
+  contacts?: Contact[]
+  audiences?: Audience[]
+  contactImportBatches?: ContactImportBatch[]
+  messageTemplates?: MessageTemplate[]
+  broadcasts?: MessageBroadcast[]
+  messageEvents?: MessageEvent[]
+  messagingSettings?: MessagingSettings
+  automations?: MessageAutomation[]
+  conversationThreads?: ConversationThread[]
+  conversationMessages?: ConversationMessage[]
   audit: AuditRecord[]
   runs?: AgentRunLog[]
   creativeProjects?: CreativeProject[]
@@ -259,6 +284,17 @@ export function createDemoRepository(): WorkspaceRepository {
         return toView(stored)
       })
     },
+    async getApprovalExecutable(id) {
+      const stored = (await load()).approvals.find((a) => a.id === id)
+      if (!stored) return null
+      return {
+        id: stored.id,
+        status: stored.status,
+        payload: stored.payload,
+        payloadHash: stored.payloadHash,
+      }
+    },
+
     async decideApproval(id, decision, note, actorId) {
       return mutate((data) => {
         const index = data.approvals.findIndex((a) => a.id === id)
@@ -346,6 +382,339 @@ export function createDemoRepository(): WorkspaceRepository {
     async deleteCampaign(id) {
       await mutate((data) => {
         data.campaigns = (data.campaigns ?? []).filter((c) => c.id !== id)
+      })
+    },
+
+    async messagingSchemaReady() {
+      return true
+    },
+
+    async listProducts() {
+      const { products = [] } = await load()
+      return [...products].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    },
+    async saveProduct(product) {
+      return mutate((data) => {
+        const saved = { ...product, updatedAt: new Date().toISOString() }
+        data.products = [saved, ...(data.products ?? []).filter((p) => p.id !== product.id)]
+        return saved
+      })
+    },
+    async deleteProduct(id) {
+      await mutate((data) => {
+        data.products = (data.products ?? []).filter((p) => p.id !== id)
+      })
+    },
+
+    async listContacts(options) {
+      const limit = options?.limit ?? 500
+      const { contacts = [] } = await load()
+      return [...contacts]
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, limit)
+    },
+    async saveContact(contact) {
+      return mutate((data) => {
+        const saved = { ...contact, updatedAt: new Date().toISOString() }
+        data.contacts = [saved, ...(data.contacts ?? []).filter((c) => c.id !== contact.id)]
+        return saved
+      })
+    },
+    async deleteContact(id) {
+      await mutate((data) => {
+        data.contacts = (data.contacts ?? []).filter((c) => c.id !== id)
+        data.audiences = (data.audiences ?? []).map((a) => ({
+          ...a,
+          memberIds: a.memberIds.filter((mid) => mid !== id),
+          estimatedSize: a.memberIds.filter((mid) => mid !== id).length,
+        }))
+      })
+    },
+    async upsertContacts(contacts) {
+      return mutate((data) => {
+        const now = new Date().toISOString()
+        const existing = data.contacts ?? []
+        const byPhone = new Map(
+          existing.filter((c) => c.phoneE164).map((c) => [c.phoneE164!, c] as const)
+        )
+        const byEmail = new Map(
+          existing
+            .filter((c) => c.email)
+            .map((c) => [c.email!.toLowerCase(), c] as const)
+        )
+        const saved: Contact[] = []
+        for (const contact of contacts) {
+          const match =
+            (contact.phoneE164 ? byPhone.get(contact.phoneE164) : undefined) ??
+            (contact.email ? byEmail.get(contact.email.toLowerCase()) : undefined)
+          const merged: Contact = {
+            ...(match ?? contact),
+            ...contact,
+            id: match?.id ?? contact.id,
+            updatedAt: now,
+          }
+          saved.push(merged)
+          if (merged.phoneE164) byPhone.set(merged.phoneE164, merged)
+          if (merged.email) byEmail.set(merged.email.toLowerCase(), merged)
+        }
+        const savedIds = new Set(saved.map((c) => c.id))
+        data.contacts = [...saved, ...existing.filter((c) => !savedIds.has(c.id))]
+        return saved
+      })
+    },
+
+    async listAudiences() {
+      const { audiences = [] } = await load()
+      return [...audiences].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    },
+    async saveAudience(audience) {
+      return mutate((data) => {
+        const saved = {
+          ...audience,
+          estimatedSize: audience.memberIds.length,
+          refreshedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }
+        data.audiences = [saved, ...(data.audiences ?? []).filter((a) => a.id !== audience.id)]
+        return saved
+      })
+    },
+    async deleteAudience(id) {
+      await mutate((data) => {
+        data.audiences = (data.audiences ?? []).filter((a) => a.id !== id)
+      })
+    },
+
+    async listContactImportBatches() {
+      const { contactImportBatches = [] } = await load()
+      return [...contactImportBatches].sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+    },
+    async saveContactImportBatch(batch) {
+      return mutate((data) => {
+        const saved = { ...batch, updatedAt: new Date().toISOString() }
+        data.contactImportBatches = [
+          saved,
+          ...(data.contactImportBatches ?? []).filter((b) => b.id !== batch.id),
+        ]
+        return saved
+      })
+    },
+
+    async listMessageTemplates() {
+      const { messageTemplates = [] } = await load()
+      return [...messageTemplates].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    },
+    async saveMessageTemplate(template) {
+      return mutate((data) => {
+        const saved = { ...template, updatedAt: new Date().toISOString() }
+        data.messageTemplates = [
+          saved,
+          ...(data.messageTemplates ?? []).filter((t) => t.id !== template.id),
+        ]
+        return saved
+      })
+    },
+    async deleteMessageTemplate(id) {
+      await mutate((data) => {
+        data.messageTemplates = (data.messageTemplates ?? []).filter((t) => t.id !== id)
+      })
+    },
+
+    async listBroadcasts() {
+      const { broadcasts = [] } = await load()
+      return [...broadcasts].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    },
+    async getBroadcast(id) {
+      return (await load()).broadcasts?.find((b) => b.id === id) ?? null
+    },
+    async saveBroadcast(broadcast) {
+      return mutate((data) => {
+        const saved = { ...broadcast, updatedAt: new Date().toISOString() }
+        data.broadcasts = [saved, ...(data.broadcasts ?? []).filter((b) => b.id !== broadcast.id)]
+        return saved
+      })
+    },
+    async deleteBroadcast(id) {
+      await mutate((data) => {
+        data.broadcasts = (data.broadcasts ?? []).filter((b) => b.id !== id)
+        data.messageEvents = (data.messageEvents ?? []).filter((e) => e.broadcastId !== id)
+      })
+    },
+    async listMessageEvents(broadcastId) {
+      const { messageEvents = [] } = await load()
+      return messageEvents.filter((e) => e.broadcastId === broadcastId)
+    },
+    async saveMessageEvents(events) {
+      await mutate((data) => {
+        const ids = new Set(events.map((e) => e.id))
+        data.messageEvents = [
+          ...events,
+          ...(data.messageEvents ?? []).filter((e) => !ids.has(e.id)),
+        ]
+      })
+    },
+
+    async getMessagingSettings() {
+      return (await load()).messagingSettings ?? defaultMessagingSettings()
+    },
+    async saveMessagingSettings(settings) {
+      return mutate((data) => {
+        const saved = { ...settings, updatedAt: new Date().toISOString() }
+        data.messagingSettings = saved
+        return saved
+      })
+    },
+    async listAutomations() {
+      const { automations = [] } = await load()
+      return [...automations].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    },
+    async saveAutomation(automation) {
+      return mutate((data) => {
+        const saved = { ...automation, updatedAt: new Date().toISOString() }
+        data.automations = [saved, ...(data.automations ?? []).filter((a) => a.id !== automation.id)]
+        return saved
+      })
+    },
+    async deleteAutomation(id) {
+      await mutate((data) => {
+        data.automations = (data.automations ?? []).filter((a) => a.id !== id)
+      })
+    },
+
+    async listConversationThreads(options) {
+      const { conversationThreads = [] } = await load()
+      return [...conversationThreads]
+        .sort((a, b) => (b.lastMessageAt ?? "").localeCompare(a.lastMessageAt ?? ""))
+        .slice(0, options?.limit ?? 80)
+    },
+    async listConversationMessages(threadId) {
+      const { conversationMessages = [] } = await load()
+      return conversationMessages
+        .filter((m) => m.threadId === threadId)
+        .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt))
+    },
+    async markConversationThreadRead(threadId) {
+      return mutate((data) => {
+        const thread = (data.conversationThreads ?? []).find((t) => t.id === threadId)
+        if (!thread) return null
+        const saved = { ...thread, unreadCount: 0, updatedAt: new Date().toISOString() }
+        data.conversationThreads = (data.conversationThreads ?? []).map((t) =>
+          t.id === threadId ? saved : t
+        )
+        return saved
+      })
+    },
+    async upsertConversationThread(input) {
+      return mutate((data) => {
+        const now = new Date().toISOString()
+        const existing = (data.conversationThreads ?? []).find(
+          (t) => t.channel === input.channel && t.externalThreadKey === input.externalThreadKey
+        )
+        if (existing) {
+          const saved: ConversationThread = {
+            ...existing,
+            connectedAccountId: input.connectedAccountId,
+            contactId: input.contactId,
+            participantHandle: input.participantHandle,
+            participantName: input.participantName,
+            status: input.status,
+            lastMessageAt: input.lastMessageAt,
+            lastMessagePreview: input.lastMessagePreview,
+            lastInboundAt: input.lastInboundAt,
+            aiSummary: input.aiSummary ?? existing.aiSummary,
+            updatedAt: now,
+          }
+          data.conversationThreads = (data.conversationThreads ?? []).map((t) =>
+            t.id === existing.id ? saved : t
+          )
+          return saved
+        }
+        const saved: ConversationThread = {
+          id: crypto.randomUUID(),
+          channel: input.channel,
+          connectedAccountId: input.connectedAccountId,
+          contactId: input.contactId,
+          externalThreadKey: input.externalThreadKey,
+          participantHandle: input.participantHandle,
+          participantName: input.participantName,
+          status: input.status,
+          unreadCount: Math.max(0, input.unreadCountDelta ?? 0),
+          lastMessageAt: input.lastMessageAt,
+          lastMessagePreview: input.lastMessagePreview,
+          lastInboundAt: input.lastInboundAt,
+          aiSummary: input.aiSummary ?? null,
+          updatedAt: now,
+        }
+        data.conversationThreads = [saved, ...(data.conversationThreads ?? [])]
+        return saved
+      })
+    },
+    async upsertConversationMessage(input) {
+      return mutate((data) => {
+        if (input.providerMessageId) {
+          const existing = (data.conversationMessages ?? []).find(
+            (m) => m.providerMessageId === input.providerMessageId
+          )
+          if (existing) return existing
+        }
+        const message: ConversationMessage = {
+          id: crypto.randomUUID(),
+          threadId: input.threadId,
+          direction: input.direction,
+          senderKind: input.senderKind,
+          body: input.body,
+          contentType: input.contentType,
+          providerMessageId: input.providerMessageId,
+          status: input.status,
+          aiIntent: null,
+          aiSentiment: null,
+          aiConfidence: null,
+          aiDraftReply: null,
+          aiShouldAutoReply: false,
+          occurredAt: input.occurredAt,
+        }
+        data.conversationMessages = [...(data.conversationMessages ?? []), message]
+        return message
+      })
+    },
+    async saveConversationOutbound(input) {
+      return mutate((data) => {
+        const now = new Date().toISOString()
+        const message: ConversationMessage = {
+          id: crypto.randomUUID(),
+          threadId: input.threadId,
+          direction: "outbound",
+          senderKind: input.senderKind,
+          body: input.body.trim(),
+          contentType: "text",
+          providerMessageId: input.providerMessageId,
+          status: "sent",
+          aiIntent: null,
+          aiSentiment: null,
+          aiConfidence: null,
+          aiDraftReply: null,
+          aiShouldAutoReply: false,
+          occurredAt: now,
+        }
+        data.conversationMessages = [...(data.conversationMessages ?? []), message]
+        data.conversationThreads = (data.conversationThreads ?? []).map((t) =>
+          t.id === input.threadId
+            ? {
+                ...t,
+                lastMessageAt: now,
+                lastMessagePreview: input.body.trim().slice(0, 160),
+                updatedAt: now,
+              }
+            : t
+        )
+        return message
+      })
+    },
+    async updateConversationMessageAi(messageId, patch) {
+      await mutate((data) => {
+        data.conversationMessages = (data.conversationMessages ?? []).map((m) =>
+          m.id === messageId ? { ...m, ...patch } : m
+        )
       })
     },
 

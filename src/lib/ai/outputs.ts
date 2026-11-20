@@ -254,6 +254,37 @@ export const videoOutputSchema = z.object({
 })
 export type VideoOutput = z.infer<typeof videoOutputSchema>
 
+export const messagingOutputSchema = z.object({
+  summary: z.string(),
+  channelPlan: z
+    .array(
+      z.object({
+        channel: z.enum(["whatsapp", "sms", "email"]),
+        role: z.string(),
+        rationale: z.string(),
+      })
+    )
+    .min(1)
+    .max(3),
+  templateDrafts: z
+    .array(
+      z.object({
+        channel: z.enum(["whatsapp", "sms", "email"]),
+        name: z.string().describe("Lowercase slug with underscores"),
+        category: z.enum(["marketing", "utility", "authentication"]),
+        subjectOrHeader: z.string().describe("Email subject, SMS header, or WhatsApp header"),
+        body: z.string().describe("Body with {{1}} {{2}} placeholders where needed"),
+        variables: z.array(z.string()).describe("Example values for {{1}}, {{2}}, …"),
+        complianceNotes: z.string().describe("Consent, DLT, Meta category, or quiet-hours notes"),
+      })
+    )
+    .min(1)
+    .max(4),
+  audienceHints: z.array(z.string()).min(1).max(6),
+  nextSteps: z.array(z.string()).min(2).max(6),
+})
+export type MessagingOutput = z.infer<typeof messagingOutputSchema>
+
 export type AgentOutput =
   | { kind: "strategy"; data: StrategyOutput }
   | { kind: "copy"; data: CopyOutput }
@@ -263,3 +294,4 @@ export type AgentOutput =
   | { kind: "research"; data: ResearchOutput }
   | { kind: "analytics"; data: AnalyticsOutput }
   | { kind: "video"; data: VideoOutput }
+  | { kind: "messaging"; data: MessagingOutput }

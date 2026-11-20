@@ -5,6 +5,7 @@ import {
   CalendarPlus,
   Check,
   Copy,
+  Inbox,
   Loader2,
   PlugZap,
   Send,
@@ -133,9 +134,14 @@ export function SocialWorkspace({
     <div className="space-y-6">
       <PageHeader
         title="Social Media"
-        description="Manage connected social channels, review publishing approvals and generate multi-platform social packs."
+        description="Connect channels and publish content here. Customer DMs, comments, and AI auto-replies live under Messaging → Inbox."
         actions={
           <>
+            <Button asChild variant="outline" size="sm">
+              <Link href={workspaceHref(workspace.slug, "messaging")}>
+                <Inbox /> Inbox & AI replies
+              </Link>
+            </Button>
             <Button asChild variant="outline" size="sm">
               <Link href={workspaceHref(workspace.slug, "planner")}>
                 <CalendarClock /> Content Planner

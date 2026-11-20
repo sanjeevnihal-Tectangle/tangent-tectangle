@@ -52,6 +52,7 @@ import {
   disconnectIntegrationAccount,
   ensureEncryptionKeyAction,
   saveIntegrationCredentials,
+  updateConnectedAccountToken,
 } from "@/features/integrations/actions"
 import {
   CONNECTION_STATUS_LABELS,
@@ -559,6 +560,9 @@ function IntegrationSetupDialog({
   const [externalAccountId, setExternalAccountId] = useState("")
   const [accessToken, setAccessToken] = useState("")
   const [verifyWithApi, setVerifyWithApi] = useState(false)
+  const [tokenAttachAccountId, setTokenAttachAccountId] = useState<string | null>(null)
+  const [tokenAttachValue, setTokenAttachValue] = useState("")
+  const [tokenAttaching, setTokenAttaching] = useState(false)
   const [dailySpendLimitInr, setDailySpendLimitInr] = useState("2500")
   const [monthlySpendLimitInr, setMonthlySpendLimitInr] = useState("50000")
 
@@ -2029,46 +2033,115 @@ function IntegrationSetupDialog({
               <div className="space-y-2">
                 {accounts.map((acc) => {
                   const isMcp = acc.externalAccountId.startsWith("mcp:")
+                  const attaching = tokenAttachAccountId === acc.id
                   return (
                     <div
                       key={acc.id}
-                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border p-3.5 text-sm"
+                      className="space-y-2 rounded-xl border p-3.5 text-sm"
                     >
-                      <div className="space-y-0.5">
-                        <div className="flex items-center gap-2">
-                          <span className="font-medium">{acc.displayName}</span>
-                          {isMcp ? (
-                            <Badge variant="brand">MCP Server</Badge>
-                          ) : null}
-                          <Badge
-                            variant={
-                              acc.status === "active" ? "success" : "warning"
-                            }
-                          >
-                            {CONNECTION_STATUS_LABELS[acc.status]}
-                          </Badge>
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="space-y-0.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-medium">{acc.displayName}</span>
+                            {isMcp ? (
+                              <Badge variant="brand">MCP Server</Badge>
+                            ) : null}
+                            <Badge
+                              variant={
+                                acc.status === "active" ? "success" : "warning"
+                              }
+                            >
+                              {CONNECTION_STATUS_LABELS[acc.status]}
+                            </Badge>
+                          </div>
+                          <div className="font-mono text-xs text-muted-foreground">
+                            {isMcp ? "Endpoint / Command: " : "ID: "}
+                            {acc.externalAccountId}
+                          </div>
                         </div>
-                        <div className="font-mono text-xs text-muted-foreground">
-                          {isMcp ? "Endpoint / Command: " : "ID: "}
-                          {acc.externalAccountId}
-                        </div>
-                      </div>
 
-                      {canManage ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="xs"
-                          disabled={disconnectingId === acc.id}
-                          onClick={() => handleDisconnect(acc.id)}
-                        >
-                          {disconnectingId === acc.id ? (
-                            <Loader2 className="size-3 animate-spin" />
-                          ) : (
-                            <Trash2 className="size-3" />
-                          )}
-                          Disconnect
-                        </Button>
+                        {canManage ? (
+                          <div className="flex flex-wrap gap-2">
+                            {!isMcp ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="xs"
+                                onClick={() => {
+                                  setTokenAttachAccountId(attaching ? null : acc.id)
+                                  setTokenAttachValue("")
+                                }}
+                              >
+                                {attaching ? "Cancel" : "Attach token"}
+                              </Button>
+                            ) : null}
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="xs"
+                              disabled={disconnectingId === acc.id}
+                              onClick={() => handleDisconnect(acc.id)}
+                            >
+                              {disconnectingId === acc.id ? (
+                                <Loader2 className="size-3 animate-spin" />
+                              ) : (
+                                <Trash2 className="size-3" />
+                              )}
+                              Disconnect
+                            </Button>
+                          </div>
+                        ) : null}
+                      </div>
+                      {attaching && canManage ? (
+                        <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
+                          <Label className="text-xs">
+                            System User / access token (required for template sync)
+                          </Label>
+                          <Input
+                            type="password"
+                            value={tokenAttachValue}
+                            onChange={(e) => setTokenAttachValue(e.target.value)}
+                            placeholder={guide.directConnect?.tokenPlaceholder ?? "Paste token"}
+                          />
+                          <Button
+                            type="button"
+                            variant="brand"
+                            size="sm"
+                            disabled={tokenAttaching || !tokenAttachValue.trim()}
+                            onClick={() => {
+                              setTokenAttaching(true)
+                              void (async () => {
+                                const res = await updateConnectedAccountToken(orgSlug, {
+                                  accountId: acc.id,
+                                  accessToken: tokenAttachValue,
+                                  verifyWithApi: true,
+                                })
+                                setTokenAttaching(false)
+                                if (!res.ok) {
+                                  toast.error(res.error)
+                                  return
+                                }
+                                if (res.warning) {
+                                  toast.warning(`Token saved. Verification note: ${res.warning}`)
+                                } else {
+                                  toast.success(
+                                    acc.provider === "whatsapp"
+                                      ? "Token saved — try Sync WhatsApp again"
+                                      : "Token saved and verified"
+                                  )
+                                }
+                                onAccountConnected(res.data)
+                                setTokenAttachAccountId(null)
+                                setTokenAttachValue("")
+                              })()
+                            }}
+                          >
+                            {tokenAttaching ? (
+                              <Loader2 className="size-3.5 animate-spin" />
+                            ) : null}
+                            Save token
+                          </Button>
+                        </div>
                       ) : null}
                     </div>
                   )

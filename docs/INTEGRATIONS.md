@@ -10,7 +10,14 @@ The frontend never calls provider APIs and never receives API keys, access token
 | OpenAI | AI | `OPENAI_API_KEY` | ✅ Used by agents (Responses API, structured outputs) |
 | Anthropic | AI | `ANTHROPIC_API_KEY` | ✅ Used by agents (Messages API, structured outputs); automatic failover with OpenAI |
 | Supabase | Platform | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | ✅ Auth, Postgres, Storage |
+<<<<<<< HEAD
 | Instagram, Facebook Pages | Social | `META_APP_ID`, `META_APP_SECRET` | ✅ OAuth (long-lived token) + approval-gated publishing (`lib/integrations/meta-publisher.ts`) |
+=======
+| Instagram, Facebook Pages | Social | `META_APP_ID`, `META_APP_SECRET` | Phase 4 |
+| WhatsApp Business (Cloud API) | Messaging | `META_APP_ID`, `META_APP_SECRET` | ✅ Adapter + OAuth/token connect; template sync/submit; bulk send — see `docs/MESSAGING_WHATSAPP.md` |
+| MSG91 SMS (India DLT) | Messaging | `MSG91_AUTH_KEY` (optional default) | ✅ Direct Connect Authkey + Flow/plain send (M4) |
+| Resend Email | Messaging | `RESEND_API_KEY` (optional default) | ✅ Direct Connect API key + send (M4) |
+>>>>>>> ba34416 (Social Media Integrations and Whatsapp automation)
 | YouTube | Social | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Phase 4 |
 | Meta Ads | Advertising | Meta app | Phase 5 |
 | Google Ads | Advertising | Google OAuth + `GOOGLE_ADS_DEVELOPER_TOKEN` | Phase 5 |

@@ -7,8 +7,12 @@ import {
   type OAuthTokens,
   type ProviderAdapter,
 } from "@/lib/integrations/gateway"
+import { createResendAdapter } from "@/lib/integrations/email"
+import { createMsg91Adapter } from "@/lib/integrations/sms"
+import { createWhatsappAdapter } from "@/lib/integrations/whatsapp"
 
 const META_GRAPH_VERSION = "v21.0"
+const META_GRAPH = `https://graph.facebook.com/${META_GRAPH_VERSION}`
 
 function requireMetaCredentials(): { appId: string; appSecret: string } {
   const env = serverEnv()
@@ -16,6 +20,245 @@ function requireMetaCredentials(): { appId: string; appSecret: string } {
     throw new IntegrationError("Meta credentials (META_APP_ID, META_APP_SECRET) are not configured.", "not_configured")
   }
   return { appId: env.META_APP_ID, appSecret: env.META_APP_SECRET }
+}
+
+async function metaGraphGet<T>(
+  path: string,
+  accessToken: string,
+  params?: Record<string, string>
+): Promise<{ ok: true; data: T } | { ok: false; status: number; body: string }> {
+  const url = new URL(`${META_GRAPH}${path}`)
+  url.searchParams.set("access_token", accessToken)
+  if (params) {
+    for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
+  }
+  const res = await fetch(url)
+  const text = await res.text().catch(() => "")
+  if (!res.ok) return { ok: false, status: res.status, body: text.slice(0, 400) }
+  try {
+    return { ok: true, data: JSON.parse(text) as T }
+  } catch {
+    return { ok: false, status: res.status, body: text.slice(0, 400) }
+  }
+}
+
+function metaGraphErrorMessage(prefix: string, status: number, body: string): string {
+  try {
+    const parsed = JSON.parse(body) as {
+      error?: { message?: string; code?: number; error_user_msg?: string }
+    }
+    const detail =
+      parsed.error?.error_user_msg ||
+      parsed.error?.message ||
+      (body ? body.slice(0, 180) : "")
+    return detail
+      ? `${prefix} (${status}): ${detail}`
+      : `${prefix} (${status})`
+  } catch {
+    return body ? `${prefix} (${status}): ${body.slice(0, 180)}` : `${prefix} (${status})`
+  }
+}
+
+type MetaPageRow = {
+  id: string
+  name: string
+  instagram_business_account?: { id: string; username?: string; name?: string }
+}
+
+function pagesToExternalAccounts(
+  pages: MetaPageRow[],
+  id: "instagram" | "facebook"
+): ExternalAccount[] {
+  if (id === "instagram") {
+    return pages
+      .filter((p) => p.instagram_business_account?.id)
+      .map((p) => ({
+        externalId: p.instagram_business_account!.id,
+        displayName: p.instagram_business_account!.username
+          ? `@${p.instagram_business_account!.username}`
+          : p.instagram_business_account!.name ?? p.name,
+        kind: "instagram_business" as const,
+      }))
+  }
+  return pages.map((p) => ({
+    externalId: p.id,
+    displayName: p.name,
+    kind: "page" as const,
+  }))
+}
+
+/** System User tokens often cannot call /me/accounts — also probe Business-owned pages. */
+async function listMetaPagesForToken(accessToken: string): Promise<{
+  pages: MetaPageRow[]
+  errors: string[]
+}> {
+  const errors: string[] = []
+  const byId = new Map<string, MetaPageRow>()
+
+  const merge = (rows: MetaPageRow[]) => {
+    for (const row of rows) byId.set(row.id, row)
+  }
+
+  const meAccounts = await metaGraphGet<{ data?: MetaPageRow[] }>("/me/accounts", accessToken, {
+    fields: "id,name,instagram_business_account{id,username,name}",
+    limit: "100",
+  })
+  if (meAccounts.ok) {
+    merge(meAccounts.data.data ?? [])
+  } else {
+    errors.push(metaGraphErrorMessage("me/accounts", meAccounts.status, meAccounts.body))
+  }
+
+  const businesses = await metaGraphGet<{ data?: { id: string; name?: string }[] }>(
+    "/me/businesses",
+    accessToken,
+    { fields: "id,name", limit: "50" }
+  )
+  if (businesses.ok) {
+    for (const business of businesses.data.data ?? []) {
+      for (const edge of ["owned_pages", "client_pages"] as const) {
+        const pages = await metaGraphGet<{ data?: MetaPageRow[] }>(
+          `/${business.id}/${edge}`,
+          accessToken,
+          {
+            fields: "id,name,instagram_business_account{id,username,name}",
+            limit: "100",
+          }
+        )
+        if (pages.ok) merge(pages.data.data ?? [])
+        else errors.push(metaGraphErrorMessage(`${edge}`, pages.status, pages.body))
+      }
+    }
+  } else {
+    errors.push(metaGraphErrorMessage("me/businesses", businesses.status, businesses.body))
+  }
+
+  return { pages: [...byId.values()], errors }
+}
+
+type MetaVerifyResult =
+  | { ok: true; account: ExternalAccount }
+  | { ok: false; error: string }
+
+async function listBusinessInstagramAccounts(accessToken: string): Promise<{
+  accounts: ExternalAccount[]
+  errors: string[]
+}> {
+  const errors: string[] = []
+  const byId = new Map<string, ExternalAccount>()
+  const businesses = await metaGraphGet<{ data?: { id: string }[] }>("/me/businesses", accessToken, {
+    fields: "id",
+    limit: "50",
+  })
+  if (!businesses.ok) {
+    errors.push(metaGraphErrorMessage("me/businesses", businesses.status, businesses.body))
+    return { accounts: [], errors }
+  }
+
+  for (const business of businesses.data.data ?? []) {
+    for (const edge of ["owned_instagram_accounts", "client_instagram_accounts", "instagram_accounts"] as const) {
+      const ig = await metaGraphGet<{
+        data?: { id: string; username?: string; name?: string }[]
+      }>(`/${business.id}/${edge}`, accessToken, {
+        fields: "id,username,name",
+        limit: "100",
+      })
+      if (!ig.ok) {
+        // Many portfolios only expose one of these edges — ignore 400s quietly.
+        if (ig.status !== 400 && ig.status !== 404) {
+          errors.push(metaGraphErrorMessage(edge, ig.status, ig.body))
+        }
+        continue
+      }
+      for (const row of ig.data.data ?? []) {
+        byId.set(row.id, {
+          externalId: row.id,
+          displayName: row.username ? `@${row.username}` : row.name ?? row.id,
+          kind: "instagram_business",
+        })
+      }
+    }
+  }
+
+  return { accounts: [...byId.values()], errors }
+}
+
+/** Verify a known IG user id / Page id without needing /me/accounts (System User friendly). */
+export async function verifyMetaConnectedAsset(input: {
+  provider: "instagram" | "facebook"
+  accessToken: string
+  externalAccountId: string
+}): Promise<MetaVerifyResult> {
+  const id = input.externalAccountId.trim()
+  if (!id) return { ok: false, error: "Missing external account id." }
+
+  if (input.provider === "instagram") {
+    const ig = await metaGraphGet<{ id?: string; username?: string; name?: string }>(
+      `/${id}`,
+      input.accessToken,
+      { fields: "id,username,name" }
+    )
+    if (ig.ok && ig.data.id) {
+      return {
+        ok: true,
+        account: {
+          externalId: ig.data.id,
+          displayName: ig.data.username
+            ? `@${ig.data.username}`
+            : ig.data.name ?? ig.data.id,
+          kind: "instagram_business",
+        },
+      }
+    }
+
+    const fromBusiness = await listBusinessInstagramAccounts(input.accessToken)
+    const match = fromBusiness.accounts.find((a) => a.externalId === id)
+    if (match) return { ok: true, account: match }
+
+    const { pages } = await listMetaPagesForToken(input.accessToken)
+    const fromPage = pages.find((p) => p.instagram_business_account?.id === id)
+    if (fromPage?.instagram_business_account) {
+      const iba = fromPage.instagram_business_account
+      return {
+        ok: true,
+        account: {
+          externalId: iba.id,
+          displayName: iba.username ? `@${iba.username}` : iba.name ?? fromPage.name,
+          kind: "instagram_business",
+        },
+      }
+    }
+
+    const detail = !ig.ok
+      ? metaGraphErrorMessage("Instagram user", ig.status, ig.body)
+      : "Token cannot read this Instagram Business account."
+    return {
+      ok: false,
+      error: `${detail} In Meta → System users → Generate token, select app tectangle_comms and enable Instagram + Pages permissions (instagram_basic / instagram_business_basic, pages_show_list, business_management). Assets assigned to the System User is not enough — permissions must be checked on the token.`,
+    }
+  }
+
+  const page = await metaGraphGet<{
+    id?: string
+    name?: string
+    instagram_business_account?: { id: string }
+  }>(`/${id}`, input.accessToken, {
+    fields: "id,name,instagram_business_account{id}",
+  })
+  if (page.ok && page.data.id) {
+    return {
+      ok: true,
+      account: {
+        externalId: page.data.id,
+        displayName: page.data.name ?? page.data.id,
+        kind: "page",
+      },
+    }
+  }
+  const detail = !page.ok
+    ? metaGraphErrorMessage("Facebook Page", page.status, page.body)
+    : "Token cannot read this Facebook Page."
+  return { ok: false, error: detail }
 }
 
 function requireGoogleCredentials(): { clientId: string; clientSecret: string } {
@@ -148,6 +391,7 @@ function createMetaAdapter(
         }))
       }
 
+<<<<<<< HEAD
       if (id === "instagram" && /^IG/.test(tokens.accessToken.trim())) {
         // "Instagram API with Instagram Login" token: one professional account, on graph.instagram.com.
         const meUrl = new URL(`https://graph.instagram.com/${META_GRAPH_VERSION}/me`)
@@ -185,24 +429,27 @@ function createMetaAdapter(
           name: string
           instagram_business_account?: { id: string; username?: string; name?: string }
         }[]
+=======
+      const { pages, errors } = await listMetaPagesForToken(tokens.accessToken)
+      let accounts = pagesToExternalAccounts(pages, id)
+
+      if (id === "instagram" && accounts.length === 0) {
+        const igDirect = await listBusinessInstagramAccounts(tokens.accessToken)
+        accounts = igDirect.accounts
+        errors.push(...igDirect.errors)
+>>>>>>> ba34416 (Social Media Integrations and Whatsapp automation)
       }
-      const pages = body.data ?? []
-      if (id === "instagram") {
-        return pages
-          .filter((p) => p.instagram_business_account?.id)
-          .map((p) => ({
-            externalId: p.instagram_business_account!.id,
-            displayName: p.instagram_business_account!.username
-              ? `@${p.instagram_business_account!.username}`
-              : p.instagram_business_account!.name ?? p.name,
-            kind: "instagram_business",
-          }))
-      }
-      return pages.map((p) => ({
-        externalId: p.id,
-        displayName: p.name,
-        kind: "page",
-      }))
+
+      if (accounts.length > 0) return accounts
+
+      const hint =
+        id === "instagram"
+          ? " Generate a System User token for app tectangle_comms with Instagram + Pages permissions checked (instagram_basic or instagram_business_basic, pages_show_list, business_management)."
+          : " Token needs pages_show_list / business_management, or assign Pages to the System User in Meta Business Suite."
+      throw new IntegrationError(
+        (errors[0] ? errors[0] : "Could not list Meta Pages") + hint,
+        "provider_error"
+      )
     },
     async missingPermissions(tokens) {
       return requiredScopes.filter((scope) => !tokens.scopes.includes(scope))
@@ -489,10 +736,18 @@ function createTikTokAdapter(requiredScopes: string[]): ProviderAdapter {
 export const BUILTIN_ADAPTERS: Record<string, ProviderAdapter> = {
   instagram: createMetaAdapter("instagram", [
     "instagram_basic",
+    "instagram_business_basic",
     "instagram_content_publish",
+    "instagram_business_content_publish",
     "instagram_manage_insights",
+    "instagram_business_manage_insights",
+    "instagram_manage_messages",
+    "instagram_manage_comments",
     "pages_show_list",
     "pages_read_engagement",
+    "pages_messaging",
+    "pages_manage_metadata",
+    "business_management",
   ]),
   facebook: createMetaAdapter("facebook", [
     "pages_show_list",
@@ -500,6 +755,9 @@ export const BUILTIN_ADAPTERS: Record<string, ProviderAdapter> = {
     "pages_read_engagement",
     "read_insights",
   ]),
+  whatsapp: createWhatsappAdapter(),
+  msg91: createMsg91Adapter(),
+  resend: createResendAdapter(),
   meta_ads: createMetaAdapter("meta_ads", ["ads_management", "ads_read", "business_management"]),
   youtube: createGoogleAdapter("youtube", [
     "https://www.googleapis.com/auth/youtube.upload",

@@ -9,6 +9,7 @@ import {
   Images,
   LayoutDashboard,
   Megaphone,
+  MessageSquareText,
   MousePointerClick,
   Palette,
   Radar,
@@ -59,6 +60,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "Marketing",
     items: [
       { id: "social", label: "Social Media", segment: "social", icon: Share2, description: "Connected accounts, publishing and social insights", status: "available", phase: 4 },
+      { id: "messaging", label: "Messaging", segment: "messaging", icon: MessageSquareText, description: "Inbox, AI replies, WhatsApp templates and bulk marketing sends", status: "available", phase: 4 },
       { id: "campaigns", label: "Campaigns", segment: "campaigns", icon: Megaphone, description: "Plan and run multi-channel campaigns", status: "available", phase: 5 },
       { id: "seo", label: "SEO Studio", segment: "seo", icon: SearchCheck, description: "Audits, keywords and SEO content", status: "available", phase: 5 },
       { id: "ads", label: "Ads Manager", segment: "ads", icon: MousePointerClick, description: "Meta and Google ads with approval-gated spend", status: "available", phase: 5 },

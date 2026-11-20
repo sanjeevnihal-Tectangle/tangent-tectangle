@@ -8,9 +8,12 @@ import { z } from "zod"
 
 import type { ConnectedAccountView } from "@/lib/domain/social"
 import { resetServerEnvCache, serverEnv } from "@/lib/env/server"
+import { verifyMetaConnectedAsset } from "@/lib/integrations/adapters"
+import { storeCredentialCiphertext } from "@/lib/integrations/credential-store"
 import { encryptToken } from "@/lib/integrations/crypto"
 import { getAdapter, IntegrationError } from "@/lib/integrations/gateway"
 import { INTEGRATION_GUIDES } from "@/lib/integrations/guides"
+import type { ExternalAccount } from "@/lib/integrations/gateway"
 import { invalidateWorkspaceCache, resolveWorkspace } from "@/lib/workspace/server"
 
 function saveFailure(error: unknown): { ok: false; error: string } {
@@ -25,7 +28,7 @@ function saveFailure(error: unknown): { ok: false; error: string } {
 }
 
 export type IntegrationActionResult<T = undefined> =
-  | { ok: true; data: T }
+  | { ok: true; data: T; warning?: string }
   | { ok: false; error: string }
 
 const ALLOWED_ENV_KEYS = new Set([
@@ -97,6 +100,7 @@ function revalidateIntegrationPaths(slug: string): void {
   invalidateWorkspaceCache(undefined, slug)
   revalidatePath(`/w/${slug}/integrations`)
   revalidatePath(`/w/${slug}/social`)
+  revalidatePath(`/w/${slug}/messaging`)
   revalidatePath(`/w/${slug}/ads`)
   revalidatePath(`/w/${slug}/seo`)
   revalidatePath(`/w/${slug}/analytics`)
@@ -190,6 +194,28 @@ const connectAccountSchema = z.object({
   monthlySpendLimitInr: z.number().int().min(0).max(100_000_000).nullable().optional(),
 })
 
+async function discoverMetaAccountMatch(
+  providerId: string,
+  accessToken: string,
+  scopes: string[],
+  preferredExternalId: string
+): Promise<ExternalAccount | null> {
+  const adapter = getAdapter(providerId)
+  const discovered = await adapter.listAccounts({
+    accessToken,
+    refreshToken: null,
+    expiresAt: null,
+    scopes,
+  })
+  if (discovered.length === 0) return null
+  return (
+    discovered.find((a) => a.externalId === preferredExternalId) ??
+    discovered.find((a) => a.externalId.endsWith(`:${preferredExternalId}`)) ??
+    discovered.find((a) => a.externalId.startsWith(`${preferredExternalId}:`)) ??
+    discovered[0]!
+  )
+}
+
 export async function connectIntegrationAccount(
   workspaceSlug: string,
   input: z.input<typeof connectAccountSchema>
@@ -228,18 +254,46 @@ export async function connectIntegrationAccount(
 
   if (verifyWithApi && accessToken) {
     try {
-      const adapter = getAdapter(providerId)
-      const discovered = await adapter.listAccounts({
-        accessToken,
-        refreshToken: null,
-        expiresAt: null,
-        scopes,
-      })
-      if (discovered.length > 0) {
-        const match =
-          discovered.find((a) => a.externalId === externalAccountId) ?? discovered[0]!
-        resolvedExternalId = match.externalId
-        resolvedName = match.displayName || displayName
+      if (
+        (providerId === "instagram" || providerId === "facebook") &&
+        externalAccountId.trim()
+      ) {
+        const verified = await verifyMetaConnectedAsset({
+          provider: providerId,
+          accessToken,
+          externalAccountId,
+        })
+        if (verified.ok) {
+          resolvedExternalId = verified.account.externalId
+          resolvedName = verified.account.displayName || displayName
+        } else {
+          const match = await discoverMetaAccountMatch(
+            providerId,
+            accessToken,
+            scopes,
+            externalAccountId
+          )
+          if (match) {
+            resolvedExternalId = match.externalId
+            resolvedName = match.displayName || displayName
+          } else {
+            return { ok: false, error: verified.error }
+          }
+        }
+      } else {
+        const adapter = getAdapter(providerId)
+        const discovered = await adapter.listAccounts({
+          accessToken,
+          refreshToken: null,
+          expiresAt: null,
+          scopes,
+        })
+        if (discovered.length > 0) {
+          const match =
+            discovered.find((a) => a.externalId === externalAccountId) ?? discovered[0]!
+          resolvedExternalId = match.externalId
+          resolvedName = match.displayName || displayName
+        }
       }
     } catch (error) {
       const message =
@@ -250,12 +304,21 @@ export async function connectIntegrationAccount(
     }
   }
 
+  const messagingProviders = new Set(["whatsapp", "msg91", "resend", "instagram", "facebook", "youtube", "meta_ads"])
+  if (messagingProviders.has(providerId) && !accessToken?.trim()) {
+    return {
+      ok: false,
+      error: `A live access token is required for ${providerId}. Paste your System User / API token before connecting.`,
+    }
+  }
+
   let accessTokenCiphertext: string | null = null
   if (accessToken) {
     const encKey = getOrCreateEncryptionKey()
     accessTokenCiphertext = encryptToken(accessToken, encKey, 1)
   }
 
+<<<<<<< HEAD
   let saved: ConnectedAccountView
   try {
     saved = await repository.saveConnectedAccount({
@@ -283,15 +346,193 @@ export async function connectIntegrationAccount(
     summary: `Connected ${providerId} account "${saved.displayName}" (${saved.externalAccountId})`,
     actor: { type: "user", id: context.user.id },
     metadata: {
+=======
+  try {
+    const saved = await repository.saveConnectedAccount({
+>>>>>>> ba34416 (Social Media Integrations and Whatsapp automation)
       provider: providerId,
-      externalAccountId: saved.externalAccountId,
-      verifiedLive: Boolean(verifyWithApi && accessToken),
-      hasEncryptedToken: Boolean(accessTokenCiphertext),
-    },
-  })
+      externalAccountId: resolvedExternalId,
+      displayName: resolvedName,
+      scopes,
+      status: "active",
+      tokenExpiresAt: null,
+      lastError: null,
+      accessTokenCiphertext,
+      refreshTokenCiphertext: null,
+      keyVersion: 1,
+      dailySpendLimitInr: dailySpendLimitInr ?? null,
+      monthlySpendLimitInr: monthlySpendLimitInr ?? null,
+    })
 
-  revalidateIntegrationPaths(context.workspace.slug)
-  return { ok: true, data: saved }
+    await repository.recordAudit({
+      action: "integration.account_connected",
+      entityType: "connected_account",
+      entityId: saved.id,
+      summary: `Connected ${providerId} account "${saved.displayName}" (${saved.externalAccountId})`,
+      actor: { type: "user", id: context.user.id },
+      metadata: {
+        provider: providerId,
+        externalAccountId: saved.externalAccountId,
+        verifiedLive: Boolean(verifyWithApi && accessToken),
+        hasEncryptedToken: Boolean(accessTokenCiphertext),
+      },
+    })
+
+    revalidateIntegrationPaths(context.workspace.slug)
+    return { ok: true, data: saved }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Could not save the connected account and token.",
+    }
+  }
+}
+
+/** Attach or replace the encrypted access token on an existing connected account. */
+export async function updateConnectedAccountToken(
+  workspaceSlug: string,
+  input: { accountId: string; accessToken: string; verifyWithApi?: boolean }
+): Promise<IntegrationActionResult<ConnectedAccountView>> {
+  const accessToken = input.accessToken.trim()
+  if (!accessToken) {
+    return { ok: false, error: "Paste a System User / API access token." }
+  }
+
+  const { context, repository } = await resolveWorkspace(workspaceSlug)
+  if (!context.permissions.includes("integrations.manage")) {
+    return { ok: false, error: "Your role cannot update integration tokens." }
+  }
+
+  const accounts = await repository.listConnectedAccounts()
+  const account = accounts.find((a) => a.id === input.accountId)
+  if (!account) return { ok: false, error: "Connected account not found." }
+
+  let displayName = account.displayName
+  let externalAccountId = account.externalAccountId
+  const guide = INTEGRATION_GUIDES[account.provider]
+  const scopes = guide?.requiredScopes ?? account.scopes
+  let verifyWarning: string | undefined
+
+  if (input.verifyWithApi) {
+    try {
+      // System User tokens often fail /me/accounts — verify the already-linked asset first.
+      if (
+        (account.provider === "instagram" || account.provider === "facebook") &&
+        account.externalAccountId
+      ) {
+        const verified = await verifyMetaConnectedAsset({
+          provider: account.provider,
+          accessToken,
+          externalAccountId: account.externalAccountId,
+        })
+        if (verified.ok) {
+          externalAccountId = verified.account.externalId
+          displayName = verified.account.displayName || displayName
+        } else {
+          try {
+            const match = await discoverMetaAccountMatch(
+              account.provider,
+              accessToken,
+              scopes,
+              account.externalAccountId
+            )
+            if (match) {
+              externalAccountId = match.externalId
+              displayName = match.displayName || displayName
+            } else {
+              // Keep saving: IG/Page id is already linked; asset assignment looks correct in Meta.
+              verifyWarning = verified.error
+            }
+          } catch (listError) {
+            verifyWarning =
+              listError instanceof IntegrationError ? listError.message : verified.error
+          }
+        }
+      } else {
+        const match = await discoverMetaAccountMatch(
+          account.provider,
+          accessToken,
+          scopes,
+          account.externalAccountId
+        )
+        if (match) {
+          externalAccountId = match.externalId
+          displayName = match.displayName || displayName
+        }
+      }
+    } catch (error) {
+      // Still persist token for already-connected Instagram/Facebook accounts.
+      if (account.provider === "instagram" || account.provider === "facebook") {
+        verifyWarning =
+          error instanceof IntegrationError
+            ? error.message
+            : "Live token verification failed against the provider API."
+      } else {
+        return {
+          ok: false,
+          error:
+            error instanceof IntegrationError
+              ? error.message
+              : "Live token verification failed against the provider API.",
+        }
+      }
+    }
+  }
+
+  const encKey = getOrCreateEncryptionKey()
+  const accessTokenCiphertext = encryptToken(accessToken, encKey, 1)
+  const updatedAt = new Date().toISOString()
+
+  try {
+    // Persist against the existing account id so we never orphan tokens on upsert.
+    await storeCredentialCiphertext({
+      connectedAccountId: account.id,
+      accessTokenCiphertext,
+      refreshTokenCiphertext: null,
+      keyVersion: 1,
+      localAccount: {
+        ...account,
+        organizationId: context.workspace.id,
+        displayName,
+        externalAccountId,
+        status: "active",
+        lastError: verifyWarning ?? null,
+        updatedAt,
+      },
+    })
+
+    await repository.recordAudit({
+      action: "integration.token_updated",
+      entityType: "connected_account",
+      entityId: account.id,
+      summary: `Updated access token for ${account.provider} “${displayName}”`,
+      actor: { type: "user", id: context.user.id },
+      metadata: {
+        provider: account.provider,
+        verifiedLive: Boolean(input.verifyWithApi),
+        accountId: account.id,
+      },
+    })
+
+    revalidateIntegrationPaths(context.workspace.slug)
+    return {
+      ok: true,
+      data: {
+        ...account,
+        displayName,
+        externalAccountId,
+        status: "active",
+        lastError: verifyWarning ?? null,
+        updatedAt,
+      },
+      warning: verifyWarning,
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Could not store the encrypted token.",
+    }
+  }
 }
 
 export async function disconnectIntegrationAccount(

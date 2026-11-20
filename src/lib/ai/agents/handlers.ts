@@ -7,6 +7,7 @@ import {
   analyticsOutputSchema,
   copyOutputSchema,
   creativeOutputSchema,
+  messagingOutputSchema,
   researchOutputSchema,
   seoOutputSchema,
   strategyOutputSchema,
@@ -131,6 +132,15 @@ You are the Growth Marketer. Design acquisition loops, referral mechanics, Whats
 
 You are the Marketing Analyst. Evaluate marketing performance, channel efficiency, anomalies and attribution notes, and recommend high-priority optimisations.`,
   },
+  messaging_specialist: {
+    tier: "fast",
+    system: `${SHARED_RULES}
+
+You are the Messaging Specialist for WhatsApp Cloud API, India SMS (MSG91 / DLT) and email.
+Draft concrete templates with {{1}} variables, channel roles, audience hints and compliance notes
+(opt-in, DLT Flow ids as placeholders, Meta marketing vs utility, quiet hours Asia/Kolkata).
+Never claim a message was sent — humans approve every blast.`,
+  },
 }
 
 export async function runAgentTask(
@@ -178,6 +188,14 @@ export async function runAgentTask(
     case "video_creator": {
       const result = await provider.generateStructured({ ...common, schema: videoOutputSchema, schemaName: "video_script" })
       return { output: { kind: "video", data: result.data }, usage: result.usage, model: result.model }
+    }
+    case "messaging_specialist": {
+      const result = await provider.generateStructured({
+        ...common,
+        schema: messagingOutputSchema,
+        schemaName: "messaging_plan",
+      })
+      return { output: { kind: "messaging", data: result.data }, usage: result.usage, model: result.model }
     }
     default: {
       const unreachable: never = agentId
@@ -241,6 +259,16 @@ export function outputToText(output: AgentOutput): string {
         ...output.data.scenes.map((s) => `Scene ${s.sceneNumber} (${s.durationSeconds}s): ${s.visualDirection} | VO: ${s.voiceoverOrDialogue} | Text: ${s.onScreenText}`),
         output.data.caption,
       ].join("\n")
+    case "messaging":
+      return [
+        output.data.summary,
+        ...output.data.channelPlan.map((c) => `${c.channel}: ${c.role} — ${c.rationale}`),
+        ...output.data.templateDrafts.map(
+          (t) =>
+            `[${t.channel} ${t.category}] ${t.name}\n${t.subjectOrHeader}\n${t.body}\nVars: ${t.variables.join(", ")}\n${t.complianceNotes}`
+        ),
+        ...output.data.nextSteps,
+      ].join("\n\n")
     default: {
       const unreachable: never = output
       throw new Error(`Unknown output ${JSON.stringify(unreachable)}`)

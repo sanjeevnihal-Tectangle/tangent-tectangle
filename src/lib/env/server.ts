@@ -21,13 +21,24 @@ const serverEnvSchema = z.object({
   AI_MAX_STEPS_PER_RUN: z.coerce.number().int().min(1).max(10).default(4),
 
   IMAGE_PROVIDER: z.enum(["none", "openai"]).default("none"),
+<<<<<<< HEAD
   IMAGE_MODEL: z.string().default("gpt-image-2.6-sunburst"),
+=======
+  IMAGE_MODEL: z.string().default("gpt-image-2"),
+>>>>>>> ba34416 (Social Media Integrations and Whatsapp automation)
   VIDEO_PROVIDER: z.enum(["none"]).default("none"),
 
   INTEGRATION_ENCRYPTION_KEY: optionalSecret,
 
   META_APP_ID: optionalSecret,
   META_APP_SECRET: optionalSecret,
+
+  /** MSG91 Authkey for India DLT SMS (optional platform default; prefer per-workspace Direct Connect). */
+  MSG91_AUTH_KEY: optionalSecret,
+  MSG91_SENDER_ID: optionalSecret,
+  /** Resend API key for transactional/marketing email (optional platform default). */
+  RESEND_API_KEY: optionalSecret,
+  RESEND_FROM_EMAIL: optionalSecret,
   GOOGLE_CLIENT_ID: optionalSecret,
   GOOGLE_CLIENT_SECRET: optionalSecret,
   GOOGLE_ADS_DEVELOPER_TOKEN: optionalSecret,
@@ -48,12 +59,31 @@ const serverEnvSchema = z.object({
 export type ServerEnv = z.infer<typeof serverEnvSchema>
 
 let cached: ServerEnv | undefined
+/** Fingerprint so Hot Reload of `.env` does not leave stale META_* / API keys cached. */
+let cachedFingerprint: string | undefined
+
+function envFingerprint(): string {
+  return [
+    process.env.META_APP_ID,
+    process.env.META_APP_SECRET,
+    process.env.OPENAI_API_KEY,
+    process.env.ANTHROPIC_API_KEY,
+    process.env.MSG91_AUTH_KEY,
+    process.env.RESEND_API_KEY,
+    process.env.INTEGRATION_ENCRYPTION_KEY,
+  ].join("|")
+}
 
 export function serverEnv(): ServerEnv {
-  cached ??= serverEnvSchema.parse(process.env)
+  const fingerprint = envFingerprint()
+  if (!cached || cachedFingerprint !== fingerprint) {
+    cached = serverEnvSchema.parse(process.env)
+    cachedFingerprint = fingerprint
+  }
   return cached
 }
 
 export function resetServerEnvCache(): void {
   cached = undefined
+  cachedFingerprint = undefined
 }

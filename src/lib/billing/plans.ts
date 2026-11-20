@@ -10,6 +10,10 @@ export const ENTITLEMENT_KEYS = [
   "team_members",
   "brand_profiles",
   "scheduled_posts_monthly",
+  "messaging_contacts_max",
+  "messaging_sends_monthly",
+  "messaging_automations",
+  "messaging_whatsapp_numbers",
 ] as const
 export type EntitlementKey = (typeof ENTITLEMENT_KEYS)[number]
 
@@ -34,6 +38,10 @@ export const ENTITLEMENT_LABELS: Record<EntitlementKey, string> = {
   team_members: "Team members",
   brand_profiles: "Brand profiles",
   scheduled_posts_monthly: "Scheduled posts",
+  messaging_contacts_max: "Messaging contacts",
+  messaging_sends_monthly: "WhatsApp sends / month",
+  messaging_automations: "Messaging automations",
+  messaging_whatsapp_numbers: "WhatsApp numbers",
 }
 
 /**
@@ -57,6 +65,10 @@ export const DEFAULT_PLANS: Record<PlanId, PlanDefinition> = {
       team_members: 2,
       brand_profiles: 5,
       scheduled_posts_monthly: 60,
+      messaging_contacts_max: 500,
+      messaging_sends_monthly: 200,
+      messaging_automations: 1,
+      messaging_whatsapp_numbers: 1,
     },
   },
   growth: {
@@ -73,6 +85,10 @@ export const DEFAULT_PLANS: Record<PlanId, PlanDefinition> = {
       team_members: 5,
       brand_profiles: 15,
       scheduled_posts_monthly: 300,
+      messaging_contacts_max: 5_000,
+      messaging_sends_monthly: 2_000,
+      messaging_automations: 5,
+      messaging_whatsapp_numbers: 2,
     },
   },
   professional: {
@@ -89,6 +105,10 @@ export const DEFAULT_PLANS: Record<PlanId, PlanDefinition> = {
       team_members: 15,
       brand_profiles: 50,
       scheduled_posts_monthly: 1_200,
+      messaging_contacts_max: 25_000,
+      messaging_sends_monthly: 15_000,
+      messaging_automations: 25,
+      messaging_whatsapp_numbers: 5,
     },
   },
   agency: {
@@ -105,6 +125,10 @@ export const DEFAULT_PLANS: Record<PlanId, PlanDefinition> = {
       team_members: null,
       brand_profiles: null,
       scheduled_posts_monthly: null,
+      messaging_contacts_max: null,
+      messaging_sends_monthly: null,
+      messaging_automations: null,
+      messaging_whatsapp_numbers: null,
     },
   },
 }

@@ -10,6 +10,7 @@ export const AGENT_IDS = [
   "performance_marketer",
   "growth_marketer",
   "marketing_analyst",
+  "messaging_specialist",
 ] as const
 export type AgentId = (typeof AGENT_IDS)[number]
 
@@ -26,6 +27,7 @@ export const ACTIVE_AGENT_IDS = [
   "performance_marketer",
   "growth_marketer",
   "marketing_analyst",
+  "messaging_specialist",
 ] as const satisfies readonly AgentId[]
 export type ActiveAgentId = (typeof ACTIVE_AGENT_IDS)[number]
 
@@ -201,6 +203,24 @@ export const AGENTS: Record<AgentId, AgentDefinition> = {
     responsibilities: ["Performance summaries", "Attribution analysis", "Anomaly detection"],
     tools: ["business_context.read", "analytics.read"],
     maxScope: "read",
+    limits: { maxOutputTokens: 4000, maxCallsPerRun: 2 },
+  },
+  messaging_specialist: {
+    id: "messaging_specialist",
+    name: "Messaging Specialist",
+    shortName: "Messaging",
+    status: "active",
+    phase: 4,
+    summary:
+      "Drafts WhatsApp, SMS (India DLT) and email templates plus audience and compliance guidance — never sends without approval.",
+    responsibilities: [
+      "Multi-channel template drafts",
+      "Consent and DLT notes",
+      "Audience targeting hints",
+      "Broadcast planning (approval-gated)",
+    ],
+    tools: ["business_context.read", "brand_profile.read", "approval.request"],
+    maxScope: "create",
     limits: { maxOutputTokens: 4000, maxCallsPerRun: 2 },
   },
 }

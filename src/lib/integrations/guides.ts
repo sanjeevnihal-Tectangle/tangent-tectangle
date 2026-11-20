@@ -196,10 +196,17 @@ export const INTEGRATION_GUIDES: Record<string, IntegrationGuide> = {
     ],
     requiredScopes: [
       "instagram_basic",
+      "instagram_business_basic",
       "instagram_content_publish",
+      "instagram_business_content_publish",
       "instagram_manage_insights",
+      "instagram_manage_messages",
+      "instagram_manage_comments",
       "pages_show_list",
       "pages_read_engagement",
+      "pages_messaging",
+      "pages_manage_metadata",
+      "business_management",
     ],
     envFields: [
       {
@@ -225,7 +232,7 @@ export const INTEGRATION_GUIDES: Record<string, IntegrationGuide> = {
       tokenLabel: "Meta Access Token / System User Token (optional for sandbox, verified if provided)",
       tokenPlaceholder: "EAABsbCS1iHgBO...",
       tokenHelp:
-        "Generate in Meta Business Settings → System Users → Generate New Token with instagram_basic & instagram_content_publish.",
+        "Meta Business → System users → Generate token on tectangle_comms with instagram_manage_messages, comments, pages_messaging, pages_manage_metadata. Messaging → Inbox → Enable live Instagram (and set Meta App Webhooks Callback to /api/integrations/meta/webhook). Use Sync Instagram for backfill.",
       supportsLiveVerification: true,
     },
     mcp: {
@@ -334,6 +341,223 @@ export const INTEGRATION_GUIDES: Record<string, IntegrationGuide> = {
           title: "Connect MCP Server to Workspace",
           description:
             "Select your transport in Step 2 and attach your Page Access Token so Social Media & Analytics agents can query Page metrics.",
+        },
+      ],
+    },
+  },
+
+  msg91: {
+    id: "msg91",
+    developerPortalName: "MSG91",
+    developerPortalUrl: "https://msg91.com/help/how-to-get-the-authkey",
+    estimatedMinutes: "6 min",
+    summary:
+      "Connect MSG91 with your Authkey and DLT-registered sender id to send India SMS (Flow / DLT templates preferred for marketing).",
+    steps: [
+      {
+        title: "Create an MSG91 account and Authkey",
+        description:
+          "In MSG91 dashboard → Authkey, copy your Authkey. Register your 6-character sender id and DLT templates with your operator.",
+      },
+      {
+        title: "Direct Connect in Tangent",
+        description:
+          "Paste Authkey as the access token. External ID is your sender id (e.g. TANGNT). Optional: set MSG91_AUTH_KEY / MSG91_SENDER_ID as platform defaults.",
+      },
+      {
+        title: "Draft SMS templates with DLT Flow id",
+        description:
+          "In Messaging → Templates (SMS), store the MSG91 Flow / DLT template id, then mark the template ready before broadcasting.",
+      },
+    ],
+    requiredScopes: ["sms.send", "sms.dlt"],
+    envFields: [
+      {
+        key: "MSG91_AUTH_KEY",
+        label: "MSG91 Authkey (MSG91_AUTH_KEY)",
+        placeholder: "Optional platform default Authkey",
+        secret: true,
+        helpText: "Prefer per-workspace Direct Connect. Env key is a fallback when the account has no stored token.",
+      },
+      {
+        key: "MSG91_SENDER_ID",
+        label: "Default sender id (MSG91_SENDER_ID)",
+        placeholder: "e.g. TANGNT",
+        secret: false,
+        helpText: "6-character DLT header used when the connected account external id is empty.",
+      },
+    ],
+    directConnect: {
+      accountNameLabel: "SMS sender display name",
+      accountNamePlaceholder: "e.g. Saffron & Sage SMS",
+      externalIdLabel: "DLT sender id",
+      externalIdPlaceholder: "e.g. TANGNT",
+      tokenLabel: "MSG91 Authkey",
+      tokenPlaceholder: "Your MSG91 Authkey",
+      tokenHelp: "Used for Flow and SMS APIs. Enable live verify to ping MSG91 balance.",
+      supportsLiveVerification: true,
+    },
+    mcp: {
+      serverName: "MSG91 MCP Bridge",
+      packageName: "@modelcontextprotocol/server-fetch",
+      npxCommand: "npx -y @modelcontextprotocol/inspector",
+      defaultEndpointPlaceholder: "https://mcp.yourdomain.com/msg91/sse",
+      documentationUrl: "https://docs.msg91.com/",
+      availableTools: ["sms_send_flow", "sms_balance"],
+      steps: [
+        {
+          title: "Prefer native MSG91 connector",
+          description: "Tangent’s built-in MSG91 adapter covers Direct Connect and DLT Flow send. Use MCP only for custom bridges.",
+        },
+      ],
+    },
+  },
+
+  resend: {
+    id: "resend",
+    developerPortalName: "Resend",
+    developerPortalUrl: "https://resend.com/docs/dashboard/api-keys/introduction",
+    estimatedMinutes: "5 min",
+    summary:
+      "Connect Resend with an API key and verified From address for approval-gated email broadcasts.",
+    steps: [
+      {
+        title: "Create a Resend API key and verify a domain",
+        description:
+          "In resend.com create an API key and add/verify your sending domain (or use the onboarding sandbox address for tests).",
+      },
+      {
+        title: "Direct Connect in Tangent",
+        description:
+          "Paste the API key as the access token. External ID is the From address (e.g. hello@yourdomain.com).",
+      },
+      {
+        title: "Draft email templates",
+        description:
+          "In Messaging → Templates (Email), set subject + body with {{1}} variables, mark ready, then broadcast with approval.",
+      },
+    ],
+    requiredScopes: ["email.send"],
+    envFields: [
+      {
+        key: "RESEND_API_KEY",
+        label: "Resend API key (RESEND_API_KEY)",
+        placeholder: "re_…",
+        secret: true,
+        helpText: "Prefer per-workspace Direct Connect. Env key is a fallback.",
+      },
+      {
+        key: "RESEND_FROM_EMAIL",
+        label: "Default From (RESEND_FROM_EMAIL)",
+        placeholder: "hello@yourdomain.com",
+        secret: false,
+        helpText: "Used when the connected account external id is empty.",
+      },
+    ],
+    directConnect: {
+      accountNameLabel: "Email sender display name",
+      accountNamePlaceholder: "e.g. Saffron & Sage Email",
+      externalIdLabel: "From email address",
+      externalIdPlaceholder: "e.g. hello@yourdomain.com",
+      tokenLabel: "Resend API key",
+      tokenPlaceholder: "re_…",
+      tokenHelp: "Enable live verify to list domains on the Resend account.",
+      supportsLiveVerification: true,
+    },
+    mcp: {
+      serverName: "Resend MCP Bridge",
+      packageName: "@modelcontextprotocol/server-fetch",
+      npxCommand: "npx -y @modelcontextprotocol/inspector",
+      defaultEndpointPlaceholder: "https://mcp.yourdomain.com/resend/sse",
+      documentationUrl: "https://resend.com/docs",
+      availableTools: ["email_send"],
+      steps: [
+        {
+          title: "Prefer native Resend connector",
+          description: "Tangent’s built-in Resend adapter covers Direct Connect and send. Use MCP only for custom bridges.",
+        },
+      ],
+    },
+  },
+
+  whatsapp: {
+    id: "whatsapp",
+    developerPortalName: "Meta for Developers — WhatsApp",
+    developerPortalUrl: "https://developers.facebook.com/docs/whatsapp/cloud-api/get-started",
+    estimatedMinutes: "8 min",
+    summary:
+      "Connect a WhatsApp Business Account (WABA) via Meta OAuth or a System User token to sync templates, submit drafts for Meta approval, and later send approval-gated bulk messages.",
+    steps: [
+      {
+        title: "Add WhatsApp product to your Meta Business App",
+        description:
+          "In developers.facebook.com/apps open your Business app → Add Product → WhatsApp. Complete Business Verification if you plan production marketing templates.",
+      },
+      {
+        title: "Configure Facebook Login redirect URI",
+        description:
+          "Under Facebook Login → Settings, add the OAuth Redirect URI shown below. Request whatsapp_business_management and whatsapp_business_messaging.",
+      },
+      {
+        title: "Connect via OAuth or paste a System User token",
+        description:
+          "Save META_APP_ID / META_APP_SECRET for 1-click OAuth, or Direct Connect with WABA id:phone number id plus a long-lived token.",
+      },
+    ],
+    requiredScopes: [
+      "whatsapp_business_management",
+      "whatsapp_business_messaging",
+      "business_management",
+    ],
+    envFields: [
+      {
+        key: "META_APP_ID",
+        label: "Meta App ID (META_APP_ID)",
+        placeholder: "e.g. 109283746519283",
+        secret: false,
+        helpText: "Shared across Instagram, Facebook Pages, WhatsApp, and Meta Ads.",
+      },
+      {
+        key: "META_APP_SECRET",
+        label: "Meta App Secret (META_APP_SECRET)",
+        placeholder: "32-character hex secret",
+        secret: true,
+        helpText: "Found in Meta App Dashboard → App Settings → Basic.",
+      },
+    ],
+    directConnect: {
+      accountNameLabel: "WhatsApp display name",
+      accountNamePlaceholder: "e.g. Saffron & Sage WhatsApp",
+      externalIdLabel: "WABA ID : Phone Number ID",
+      externalIdPlaceholder: "e.g. 102938475610293:109283746501928",
+      tokenLabel: "System User / permanent access token",
+      tokenPlaceholder: "EAABsbCS1iHgBO...",
+      tokenHelp:
+        "Generate in Meta Business Settings → System Users with whatsapp_business_management and whatsapp_business_messaging. External ID must be wabaId:phoneNumberId.",
+      supportsLiveVerification: true,
+    },
+    mcp: {
+      serverName: "WhatsApp Cloud API MCP Bridge",
+      packageName: "@modelcontextprotocol/server-whatsapp",
+      npxCommand: "npx -y @modelcontextprotocol/inspector",
+      defaultEndpointPlaceholder: "https://mcp.yourdomain.com/whatsapp/sse",
+      documentationUrl: "https://developers.facebook.com/docs/whatsapp/cloud-api",
+      availableTools: [
+        "wa_list_phone_numbers",
+        "wa_list_templates",
+        "wa_submit_template",
+        "wa_send_template_message",
+      ],
+      steps: [
+        {
+          title: "Prefer native WhatsApp connector",
+          description:
+            "Tangent’s built-in WhatsApp adapter covers OAuth, template sync and submit. Use MCP only if you already run a WhatsApp Graph bridge.",
+        },
+        {
+          title: "Attach encrypted token",
+          description:
+            "If using MCP, paste the System User token so Tangent can encrypt it with AES-256-GCM before storage.",
         },
       ],
     },

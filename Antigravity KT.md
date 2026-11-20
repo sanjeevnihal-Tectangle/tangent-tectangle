@@ -47,7 +47,7 @@ Non-negotiable product rules (enforce them in every change):
 | Asset Library (private Supabase Storage, signed URLs, picker) | ✅ |
 | Content Planner (month/week/day/list, Draft → In review → Approved, AI monthly calendar) | ✅ |
 | AI provider failover (OpenAI ⇄ Anthropic) | ✅ |
-| AI image generation (OpenAI gpt-image) | 🟡 Code written; **untested** (OpenAI account has no credits; `IMAGE_PROVIDER=none`) |
+| AI image generation (OpenAI gpt-image-2) | ✅ Enabled (`IMAGE_PROVIDER=openai`, `IMAGE_MODEL=gpt-image-2`); provider verified via script. `gpt-image-1` is NOT available to this key |
 | Video Studio | ⬜ |
 | Social connectors (Meta/Instagram/Facebook, YouTube), scheduling, publishing jobs | ⬜ Phase 4 |
 | Campaigns, SEO Studio, Ads Manager, Analytics, Competitors | ⬜ Phase 5. Each shows a roadmap page via `src/app/w/[orgSlug]/[module]/page.tsx` + `src/lib/roadmap.ts` |
@@ -56,7 +56,7 @@ Non-negotiable product rules (enforce them in every change):
 **Not yet verified live** (built and typechecked, but never clicked through by a signed-in user):
 - Uploading an asset to Supabase Storage (Asset Library, asset picker)
 - "Send to Planner" from the editor (exports PNG pages → uploads them → creates a draft post)
-- AI image generation
+- AI image generation inside the Studio UI (the provider itself is verified; storing the result as an asset is not yet clicked through)
 
 Verify these first (see §9).
 
@@ -77,8 +77,8 @@ Key env vars:
 |---|---|
 | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Live mode (absent → demo mode) |
 | `SUPABASE_DB_URL` | Postgres URL for the Supabase CLI only (password is URL-encoded) |
-| `OPENAI_API_KEY`, `AI_MODEL_FAST` (gpt-5-mini), `AI_MODEL_REASONING` (gpt-5) | OpenAI (**no credits currently**) |
-| `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL_FAST` (claude-haiku-5-5), `ANTHROPIC_MODEL_REASONING` (claude-sonnet-5-5) | Anthropic (working; currently serves all AI) |
+| `OPENAI_API_KEY`, `AI_MODEL_FAST` (gpt-5-mini), `AI_MODEL_REASONING` (gpt-5) | OpenAI — primary for all text AI (new key with credits, verified 13 Nov) |
+| `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL_FAST` (claude-haiku-5-5), `ANTHROPIC_MODEL_REASONING` (claude-sonnet-5-5) | Anthropic — automatic failover |
 | `AI_PROVIDER_ORDER` | Failover order, default `openai,anthropic` |
 | `IMAGE_PROVIDER` (`none`/`openai`), `IMAGE_MODEL` | Image generation |
 | `NEXT_PUBLIC_TANGENT_FORCE_DEMO=true` | Force the demo workspace even with Supabase set (handy for testing without a login) |

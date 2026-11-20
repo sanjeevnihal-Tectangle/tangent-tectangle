@@ -22,7 +22,7 @@ export interface OAuthTokens {
 export interface ExternalAccount {
   externalId: string
   displayName: string
-  kind: "page" | "instagram_business" | "channel" | "ad_account" | "property"
+  kind: "page" | "instagram_business" | "channel" | "ad_account" | "property" | "phone_number" | "whatsapp_business"
 }
 
 export interface ProviderAdapter {
