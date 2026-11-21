@@ -158,6 +158,8 @@ export type InstagramSyncResult = {
   messages: number
   comments: number
   threads: ConversationThread[]
+  /** Newly inserted inbound DM messages (for intake / AI on localhost poll). */
+  newInbound: { id: string; threadId: string; body: string; participantName: string }[]
 }
 
 export async function syncInstagramInbox(input: {
@@ -188,6 +190,7 @@ export async function syncInstagramInbox(input: {
   let messageCount = 0
   let conversationCount = 0
   const touchedThreads: ConversationThread[] = []
+  const newInbound: InstagramSyncResult["newInbound"] = []
 
   for (const convo of conversations.data ?? []) {
     const participants = convo.participants?.data ?? []
@@ -212,14 +215,22 @@ export async function syncInstagramInbox(input: {
       connectedAccountId: input.connectedAccountId,
       contactId: null,
       externalThreadKey: `ig_dm:${convo.id}`,
-      participantHandle: other.username ? `@${other.username}` : other.id,
-      participantName: other.name || other.username || other.id,
+      // Store Instagram-scoped user id so session replies can address the recipient.
+      participantHandle: other.id,
+      participantName: other.username
+        ? `@${other.username}`
+        : other.name || other.id,
       status: "open",
       lastMessageAt: lastAt,
       lastMessagePreview: preview,
       lastInboundAt: msgs.some((m) => m.from?.id && m.from.id !== ourIgId) ? lastAt : null,
       unreadCountDelta: msgs.filter((m) => m.from?.id && m.from.id !== ourIgId).length,
-      metadata: { conversationId: convo.id, pageId: resolved.pageId, kind: "dm" },
+      metadata: {
+        conversationId: convo.id,
+        pageId: resolved.pageId,
+        participantIgId: other.id,
+        kind: "dm",
+      },
     })
     touchedThreads.push(thread)
 
@@ -241,7 +252,17 @@ export async function syncInstagramInbox(input: {
         occurredAt,
         metadata: { from: msg.from ?? null, kind: "dm" },
       })
-      if (saved) messageCount += 1
+      if (saved?.created) {
+        messageCount += 1
+        if (inbound) {
+          newInbound.push({
+            id: saved.message.id,
+            threadId: thread.id,
+            body: saved.message.body,
+            participantName: thread.participantName || thread.participantHandle || "Customer",
+          })
+        }
+      }
     }
   }
 
@@ -303,7 +324,7 @@ export async function syncInstagramInbox(input: {
         occurredAt,
         metadata: { kind: "comment", mediaId: post.id, from: comment.from ?? null },
       })
-      if (saved) {
+      if (saved?.created) {
         messageCount += 1
         commentCount += 1
       }
@@ -315,5 +336,6 @@ export async function syncInstagramInbox(input: {
     messages: messageCount,
     comments: commentCount,
     threads: touchedThreads,
+    newInbound,
   }
 }

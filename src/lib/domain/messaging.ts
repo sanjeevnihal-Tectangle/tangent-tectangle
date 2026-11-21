@@ -491,8 +491,55 @@ export type InboxAutoReplyMode = (typeof INBOX_AUTO_REPLY_MODES)[number]
 
 export const INBOX_AUTO_REPLY_MODE_LABELS: Record<InboxAutoReplyMode, string> = {
   off: "Off — log only",
-  draft_only: "AI drafts — human sends",
-  auto_faq: "Auto-reply FAQs (high confidence only)",
+  draft_only: "AI drafts — human sends (all channels)",
+  auto_faq: "Auto-reply FAQs on all channels (high confidence)",
+}
+
+export const INTAKE_BRANCH_ACTIONS = ["next_question", "goto_question", "complete", "ai"] as const
+export type IntakeBranchAction = (typeof INTAKE_BRANCH_ACTIONS)[number]
+
+export const INTAKE_BRANCH_ACTION_LABELS: Record<IntakeBranchAction, string> = {
+  next_question: "Ask the next question in the list",
+  goto_question: "Ask a specific question",
+  complete: "Send reply and end intake",
+  ai: "Send reply (optional) then hand off to AI",
+}
+
+export const intakeBranchSchema = z.object({
+  id: z.string().min(1).max(40),
+  label: z.string().trim().max(80).default(""),
+  /** Case-insensitive substring match against the customer’s answer. */
+  keywords: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+  replyMessage: z.string().trim().max(1000).default(""),
+  action: z.enum(INTAKE_BRANCH_ACTIONS).default("next_question"),
+  gotoQuestionId: z.string().nullable().default(null),
+})
+export type IntakeBranch = z.infer<typeof intakeBranchSchema>
+
+export const intakeQuestionSchema = z.object({
+  id: z.string().min(1).max(40),
+  /** Stable answer key stored on the thread (e.g. business_type). */
+  key: z.string().trim().min(1).max(40).regex(/^[a-z][a-z0-9_]*$/i, "Use letters, numbers, underscores"),
+  prompt: z.string().trim().min(1, "Enter a question").max(500),
+  /** If/then paths based on the customer’s answer. First matching keywords wins. */
+  branches: z.array(intakeBranchSchema).max(6).default([]),
+  /** Used when no branch keywords match. */
+  fallbackAction: z.enum(INTAKE_BRANCH_ACTIONS).default("next_question"),
+  fallbackReplyMessage: z.string().trim().max(1000).default(""),
+  fallbackGotoQuestionId: z.string().nullable().default(null),
+})
+export type IntakeQuestion = z.infer<typeof intakeQuestionSchema>
+
+export function emptyIntakeBranch(): IntakeBranch {
+  return {
+    id: `b_${Math.random().toString(36).slice(2, 10)}`,
+    label: "",
+    keywords: [],
+    replyMessage: "",
+    // Default to ending with the branch reply (most common “Yes → send link” case).
+    action: "complete",
+    gotoQuestionId: null,
+  }
 }
 
 export const messagingSettingsSchema = z.object({
@@ -506,9 +553,78 @@ export const messagingSettingsSchema = z.object({
   inboxAiEnabled: z.boolean().default(true),
   autoReplyMode: z.enum(INBOX_AUTO_REPLY_MODES).default("draft_only"),
   autoReplyConnectedAccountId: z.string().nullable().default(null),
+  /**
+   * Guided first-touch flow: welcome, then qualification questions (e.g. business type)
+   * before normal FAQ / sales AI takes over.
+   */
+  intakeFlowEnabled: z.boolean().default(true),
+  /** When true, intake welcome/questions are sent automatically (not only drafted). */
+  intakeAutoSend: z.boolean().default(false),
+  intakeWelcomeMessage: z
+    .string()
+    .trim()
+    .max(1000)
+    .default(
+      "Hi! Thanks for reaching out. We help businesses grow with marketing and software tools."
+    ),
+  intakeQuestions: z.array(intakeQuestionSchema).max(8).default([]),
   updatedAt: z.string(),
 })
 export type MessagingSettings = z.infer<typeof messagingSettingsSchema>
+
+/** Progress of the intake flow on a conversation thread (stored in thread metadata). */
+export const intakeThreadStateSchema = z.object({
+  welcomeSent: z.boolean().default(false),
+  askedKeys: z.array(z.string()).default([]),
+  answers: z.record(z.string(), z.string()).default({}),
+  completed: z.boolean().default(false),
+})
+export type IntakeThreadState = z.infer<typeof intakeThreadStateSchema>
+
+export function defaultIntakeQuestions(): IntakeQuestion[] {
+  return [
+    {
+      id: "laundry_check",
+      key: "business_type",
+      prompt: "Please confirm if you are into the laundry business",
+      branches: [
+        {
+          id: "yes_laundry",
+          label: "Yes / laundry",
+          keywords: ["yes", "yeah", "yep", "laundry", "we are", "i am"],
+          replyMessage:
+            "Great! We build software for laundry businesses. Tell me what you’d like help with (demo, pricing, or onboarding).",
+          action: "ai",
+          gotoQuestionId: null,
+        },
+        {
+          id: "no_other",
+          label: "No / other",
+          keywords: ["no", "not", "other", "different"],
+          replyMessage: "Got it — thanks for letting us know.",
+          action: "goto_question",
+          gotoQuestionId: "other_business",
+        },
+      ],
+      fallbackAction: "goto_question",
+      fallbackReplyMessage: "Thanks for sharing.",
+      fallbackGotoQuestionId: "other_business",
+    },
+    {
+      id: "other_business",
+      key: "other_business",
+      prompt: "What type of business are you in?",
+      branches: [],
+      fallbackAction: "ai",
+      fallbackReplyMessage: "Thanks — I’ll tailor the next steps to your industry.",
+      fallbackGotoQuestionId: null,
+    },
+  ]
+}
+
+export function emptyIntakeState(): IntakeThreadState {
+  return { welcomeSent: false, askedKeys: [], answers: {}, completed: false }
+}
 
 export const INBOX_CHANNELS = [
   "whatsapp",
@@ -621,6 +737,11 @@ export function defaultMessagingSettings(): MessagingSettings {
     inboxAiEnabled: true,
     autoReplyMode: "draft_only",
     autoReplyConnectedAccountId: null,
+    intakeFlowEnabled: true,
+    intakeAutoSend: false,
+    intakeWelcomeMessage:
+      "Hi! Thanks for reaching out. We help businesses grow with marketing and software tools.",
+    intakeQuestions: defaultIntakeQuestions(),
     updatedAt: new Date().toISOString(),
   }
 }

@@ -40,12 +40,18 @@ import {
   AUTOMATION_SCHEDULE_LABELS,
   AUTOMATION_SCHEDULE_PRESETS,
   CHANNEL_PROVIDER,
+  defaultIntakeQuestions,
   emptyAutomation,
+  emptyIntakeBranch,
   INBOX_AUTO_REPLY_MODE_LABELS,
   INBOX_AUTO_REPLY_MODES,
+  INTAKE_BRANCH_ACTION_LABELS,
+  INTAKE_BRANCH_ACTIONS,
   MESSAGE_CHANNEL_LABELS,
   type Audience,
   type InboxAutoReplyMode,
+  type IntakeBranchAction,
+  type IntakeQuestion,
   type MessageAutomation,
   type MessageChannel,
   type MessageTemplate,
@@ -405,16 +411,44 @@ export function MessagingAutomationsPanel({
 export function MessagingSettingsPanel({
   settings: initial,
   setSettings,
-  whatsappAccounts = [],
+  inboxAccounts = [],
 }: {
   settings: MessagingSettings
   setSettings: Dispatch<SetStateAction<MessagingSettings>>
-  whatsappAccounts?: ConnectedAccountView[]
+  /** Connected inbox channels (WhatsApp, Instagram, …) used for auto-replies. */
+  inboxAccounts?: ConnectedAccountView[]
 }) {
   const { workspace } = useWorkspace()
   const canManage = useCan("campaigns.manage")
   const [draft, setDraft] = useState(initial)
   const [pending, startTransition] = useTransition()
+  /** Raw keyword text while typing — avoids eating commas when round-tripping through arrays. */
+  const [keywordDrafts, setKeywordDrafts] = useState<Record<string, string>>({})
+
+  function parseKeywordList(raw: string): string[] {
+    return raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+  }
+
+  function updateBranchKeywords(questionId: string, branchId: string, raw: string) {
+    setKeywordDrafts((prev) => ({ ...prev, [branchId]: raw }))
+    const keywords = parseKeywordList(raw)
+    setDraft((current) => ({
+      ...current,
+      intakeQuestions: current.intakeQuestions.map((q) =>
+        q.id === questionId
+          ? {
+              ...q,
+              branches: (q.branches ?? []).map((b) =>
+                b.id === branchId ? { ...b, keywords } : b
+              ),
+            }
+          : q
+      ),
+    }))
+  }
 
   return (
     <div className="space-y-4">
@@ -425,11 +459,15 @@ export function MessagingSettingsPanel({
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        <p className="text-xs text-muted-foreground">
+          Applies to every connected inbox channel (WhatsApp, Instagram, and others as they come
+          online). Each chat replies from the account that received the message.
+        </p>
         <div className="flex items-center justify-between rounded-md border px-3 py-2">
           <div>
             <p className="text-sm font-medium">Understand inbound with AI</p>
             <p className="text-xs text-muted-foreground">
-              Classifies intent and drafts replies when WhatsApp messages arrive.
+              Classifies intent and drafts replies when messages arrive on any connected channel.
             </p>
           </div>
           <Switch
@@ -459,13 +497,13 @@ export function MessagingSettingsPanel({
             </SelectContent>
           </Select>
           <p className="text-[11px] text-muted-foreground">
-            Auto-FAQ only sends on high-confidence pricing/hours/product/greeting intents. Everything
-            else stays as an AI draft for a human to send.
+            Auto-FAQ sends on high-confidence pricing/hours/product/greeting intents across channels.
+            Everything else stays as an AI draft unless intake auto-send is on.
           </p>
         </div>
-        {whatsappAccounts.length > 0 ? (
+        {inboxAccounts.length > 0 ? (
           <div className="space-y-1.5">
-            <Label>Auto-reply WhatsApp number</Label>
+            <Label>Preferred send account (optional)</Label>
             <Select
               value={draft.autoReplyConnectedAccountId ?? "none"}
               onValueChange={(v) =>
@@ -480,16 +518,531 @@ export function MessagingSettingsPanel({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="none">Use inbound number</SelectItem>
-                {whatsappAccounts.map((account) => (
+                <SelectItem value="none">Use the account that received the message</SelectItem>
+                {inboxAccounts.map((account) => (
                   <SelectItem key={account.id} value={account.id}>
-                    {account.displayName}
+                    {account.provider} · {account.displayName}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            <p className="text-[11px] text-muted-foreground">
+              Leave as “received account” so Instagram DMs reply via Instagram and WhatsApp via
+              WhatsApp. Only override if you intentionally want one default sender.
+            </p>
           </div>
-        ) : null}
+        ) : (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            Connect WhatsApp and/or Instagram under Integrations so auto-replies have a send
+            account.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Settings2 className="size-4" /> Intake flow (welcome → qualify)
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center justify-between rounded-md border px-3 py-2">
+          <div>
+            <p className="text-sm font-medium">Use guided intake on new chats</p>
+            <p className="text-xs text-muted-foreground">
+              First reply is your welcome message, then your qualification questions (e.g. business
+              type) on WhatsApp, Instagram, and any other inbox channel. After that, normal FAQ AI
+              continues.
+            </p>
+          </div>
+          <Switch
+            checked={draft.intakeFlowEnabled}
+            disabled={!canManage}
+            onCheckedChange={(intakeFlowEnabled) => setDraft({ ...draft, intakeFlowEnabled })}
+          />
+        </div>
+        <div className="flex items-center justify-between rounded-md border px-3 py-2">
+          <div>
+            <p className="text-sm font-medium">Auto-send intake messages</p>
+            <p className="text-xs text-muted-foreground">
+              When on, welcome/questions send automatically. When off, they appear as AI drafts for
+              you to send.
+            </p>
+          </div>
+          <Switch
+            checked={draft.intakeAutoSend}
+            disabled={!canManage || !draft.intakeFlowEnabled}
+            onCheckedChange={(intakeAutoSend) => setDraft({ ...draft, intakeAutoSend })}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Welcome message</Label>
+          <Textarea
+            rows={4}
+            disabled={!canManage || !draft.intakeFlowEnabled}
+            value={draft.intakeWelcomeMessage}
+            onChange={(e) => setDraft({ ...draft, intakeWelcomeMessage: e.target.value })}
+            placeholder="Hi! Thanks for reaching out…"
+          />
+        </div>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between gap-2">
+            <Label>Qualification questions</Label>
+            {canManage && draft.intakeFlowEnabled ? (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  const next: IntakeQuestion = {
+                    id: crypto.randomUUID().slice(0, 8),
+                    key: `question_${(draft.intakeQuestions?.length ?? 0) + 1}`,
+                    prompt: "",
+                    branches: [],
+                    fallbackAction: "next_question",
+                    fallbackReplyMessage: "",
+                    fallbackGotoQuestionId: null,
+                  }
+                  setDraft({
+                    ...draft,
+                    intakeQuestions: [...(draft.intakeQuestions ?? []), next],
+                  })
+                }}
+              >
+                <Plus className="size-3.5" /> Add question
+              </Button>
+            ) : null}
+          </div>
+          {(draft.intakeQuestions ?? []).length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              No questions yet.{" "}
+              {canManage ? (
+                <button
+                  type="button"
+                  className="underline"
+                  onClick={() =>
+                    setDraft({ ...draft, intakeQuestions: defaultIntakeQuestions() })
+                  }
+                >
+                  Load laundry yes/no example
+                </button>
+              ) : null}
+            </p>
+          ) : (
+            <div className="space-y-3">
+              {(draft.intakeQuestions ?? []).map((question, index) => (
+                <div
+                  key={question.id}
+                  className="space-y-3 rounded-md border border-border/70 p-3"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-medium text-muted-foreground">
+                      Step {index + 1}
+                      {index === 0 ? " (sent with welcome)" : ""}
+                    </p>
+                    {canManage ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setDraft({
+                            ...draft,
+                            intakeQuestions: draft.intakeQuestions.filter((q) => q.id !== question.id),
+                          })
+                        }
+                      >
+                        <Trash2 className="size-3.5" />
+                      </Button>
+                    ) : null}
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-[140px_minmax(0,1fr)]">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Answer key</Label>
+                      <Input
+                        disabled={!canManage || !draft.intakeFlowEnabled}
+                        value={question.key}
+                        onChange={(e) => {
+                          const key = e.target.value
+                          setDraft({
+                            ...draft,
+                            intakeQuestions: draft.intakeQuestions.map((q) =>
+                              q.id === question.id ? { ...q, key } : q
+                            ),
+                          })
+                        }}
+                        placeholder="business_type"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Question</Label>
+                      <Textarea
+                        rows={2}
+                        disabled={!canManage || !draft.intakeFlowEnabled}
+                        value={question.prompt}
+                        onChange={(e) => {
+                          const prompt = e.target.value
+                          setDraft({
+                            ...draft,
+                            intakeQuestions: draft.intakeQuestions.map((q) =>
+                              q.id === question.id ? { ...q, prompt } : q
+                            ),
+                          })
+                        }}
+                        placeholder="Please confirm if you are into the laundry business"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 rounded-md border border-dashed border-border/60 p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-xs font-medium">If they answer… (branches)</p>
+                      {canManage && draft.intakeFlowEnabled ? (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            setDraft({
+                              ...draft,
+                              intakeQuestions: draft.intakeQuestions.map((q) =>
+                                q.id === question.id
+                                  ? {
+                                      ...q,
+                                      branches: [...(q.branches ?? []), emptyIntakeBranch()],
+                                    }
+                                  : q
+                              ),
+                            })
+                          }
+                        >
+                          <Plus className="size-3.5" /> Add branch
+                        </Button>
+                      ) : null}
+                    </div>
+                    {(question.branches ?? []).length === 0 ? (
+                      <p className="text-[11px] text-muted-foreground">
+                        No branches yet — every answer uses the fallback below. Add a “Yes” and
+                        “No” branch to change the reply by answer.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {(question.branches ?? []).map((branch) => (
+                          <div
+                            key={branch.id}
+                            className="space-y-2 rounded-md bg-muted/30 p-2.5"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <Input
+                                className="h-8"
+                                disabled={!canManage || !draft.intakeFlowEnabled}
+                                value={branch.label}
+                                placeholder="Label (e.g. Yes / laundry)"
+                                onChange={(e) => {
+                                  const label = e.target.value
+                                  setDraft({
+                                    ...draft,
+                                    intakeQuestions: draft.intakeQuestions.map((q) =>
+                                      q.id === question.id
+                                        ? {
+                                            ...q,
+                                            branches: (q.branches ?? []).map((b) =>
+                                              b.id === branch.id ? { ...b, label } : b
+                                            ),
+                                          }
+                                        : q
+                                    ),
+                                  })
+                                }}
+                              />
+                              {canManage ? (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => {
+                                    setKeywordDrafts((prev) => {
+                                      const next = { ...prev }
+                                      delete next[branch.id]
+                                      return next
+                                    })
+                                    setDraft({
+                                      ...draft,
+                                      intakeQuestions: draft.intakeQuestions.map((q) =>
+                                        q.id === question.id
+                                          ? {
+                                              ...q,
+                                              branches: (q.branches ?? []).filter(
+                                                (b) => b.id !== branch.id
+                                              ),
+                                            }
+                                          : q
+                                      ),
+                                    })
+                                  }}
+                                >
+                                  <Trash2 className="size-3.5" />
+                                </Button>
+                              ) : null}
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs">Match keywords (comma-separated)</Label>
+                              <Input
+                                disabled={!canManage || !draft.intakeFlowEnabled}
+                                value={
+                                  keywordDrafts[branch.id] ??
+                                  (branch.keywords ?? []).join(", ")
+                                }
+                                placeholder="yes, yeah, yep, laundry"
+                                onChange={(e) =>
+                                  updateBranchKeywords(question.id, branch.id, e.target.value)
+                                }
+                                onBlur={() => {
+                                  const raw =
+                                    keywordDrafts[branch.id] ??
+                                    (branch.keywords ?? []).join(", ")
+                                  const keywords = parseKeywordList(raw)
+                                  setDraft((current) => ({
+                                    ...current,
+                                    intakeQuestions: current.intakeQuestions.map((q) =>
+                                      q.id === question.id
+                                        ? {
+                                            ...q,
+                                            branches: (q.branches ?? []).map((b) =>
+                                              b.id === branch.id ? { ...b, keywords } : b
+                                            ),
+                                          }
+                                        : q
+                                    ),
+                                  }))
+                                  setKeywordDrafts((prev) => {
+                                    const next = { ...prev }
+                                    delete next[branch.id]
+                                    return next
+                                  })
+                                }}
+                              />
+                              <p className="text-[10px] text-muted-foreground">
+                                Type several words separated by commas, e.g.{" "}
+                                <span className="text-foreground">yes, yeah, yep</span>
+                              </p>
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs">Reply to send</Label>
+                              <Textarea
+                                rows={2}
+                                disabled={!canManage || !draft.intakeFlowEnabled}
+                                value={branch.replyMessage}
+                                placeholder="Great! Here’s how we help laundry businesses…"
+                                onChange={(e) => {
+                                  const replyMessage = e.target.value
+                                  setDraft({
+                                    ...draft,
+                                    intakeQuestions: draft.intakeQuestions.map((q) =>
+                                      q.id === question.id
+                                        ? {
+                                            ...q,
+                                            branches: (q.branches ?? []).map((b) =>
+                                              b.id === branch.id ? { ...b, replyMessage } : b
+                                            ),
+                                          }
+                                        : q
+                                    ),
+                                  })
+                                }}
+                              />
+                            </div>
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <div className="space-y-1">
+                                <Label className="text-xs">Then</Label>
+                                <Select
+                                  value={branch.action}
+                                  disabled={!canManage || !draft.intakeFlowEnabled}
+                                  onValueChange={(v) => {
+                                    const action = v as IntakeBranchAction
+                                    setDraft({
+                                      ...draft,
+                                      intakeQuestions: draft.intakeQuestions.map((q) =>
+                                        q.id === question.id
+                                          ? {
+                                              ...q,
+                                              branches: (q.branches ?? []).map((b) =>
+                                                b.id === branch.id ? { ...b, action } : b
+                                              ),
+                                            }
+                                          : q
+                                      ),
+                                    })
+                                  }}
+                                >
+                                  <SelectTrigger className="h-8">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {INTAKE_BRANCH_ACTIONS.map((action) => (
+                                      <SelectItem key={action} value={action}>
+                                        {INTAKE_BRANCH_ACTION_LABELS[action]}
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                                <p className="text-[10px] text-muted-foreground">
+                                  For a link / demo reply after “Yes”, choose{" "}
+                                  <span className="text-foreground">Send reply and end intake</span>
+                                  .
+                                </p>
+                              </div>
+                              {branch.action === "goto_question" ? (
+                                <div className="space-y-1">
+                                  <Label className="text-xs">Go to question</Label>
+                                  <Select
+                                    value={branch.gotoQuestionId ?? "none"}
+                                    disabled={!canManage || !draft.intakeFlowEnabled}
+                                    onValueChange={(v) =>
+                                      setDraft({
+                                        ...draft,
+                                        intakeQuestions: draft.intakeQuestions.map((q) =>
+                                          q.id === question.id
+                                            ? {
+                                                ...q,
+                                                branches: (q.branches ?? []).map((b) =>
+                                                  b.id === branch.id
+                                                    ? {
+                                                        ...b,
+                                                        gotoQuestionId: v === "none" ? null : v,
+                                                      }
+                                                    : b
+                                                ),
+                                              }
+                                            : q
+                                        ),
+                                      })
+                                    }
+                                  >
+                                    <SelectTrigger className="h-8">
+                                      <SelectValue placeholder="Pick question" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="none">Select…</SelectItem>
+                                      {draft.intakeQuestions
+                                        .filter((q) => q.id !== question.id)
+                                        .map((q) => (
+                                          <SelectItem key={q.id} value={q.id}>
+                                            Step{" "}
+                                            {draft.intakeQuestions.findIndex((x) => x.id === q.id) +
+                                              1}
+                                            : {q.prompt.slice(0, 40) || q.key}
+                                          </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                  </Select>
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="space-y-2 border-t border-border/50 pt-2">
+                      <p className="text-xs font-medium text-muted-foreground">
+                        If no keywords match (fallback)
+                      </p>
+                      <div className="space-y-1">
+                        <Label className="text-xs">Fallback reply</Label>
+                        <Textarea
+                          rows={2}
+                          disabled={!canManage || !draft.intakeFlowEnabled}
+                          value={question.fallbackReplyMessage ?? ""}
+                          placeholder="Thanks for sharing."
+                          onChange={(e) => {
+                            const fallbackReplyMessage = e.target.value
+                            setDraft({
+                              ...draft,
+                              intakeQuestions: draft.intakeQuestions.map((q) =>
+                                q.id === question.id ? { ...q, fallbackReplyMessage } : q
+                              ),
+                            })
+                          }}
+                        />
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <div className="space-y-1">
+                          <Label className="text-xs">Fallback then</Label>
+                          <Select
+                            value={question.fallbackAction ?? "next_question"}
+                            disabled={!canManage || !draft.intakeFlowEnabled}
+                            onValueChange={(v) => {
+                              const fallbackAction = v as IntakeBranchAction
+                              setDraft({
+                                ...draft,
+                                intakeQuestions: draft.intakeQuestions.map((q) =>
+                                  q.id === question.id ? { ...q, fallbackAction } : q
+                                ),
+                              })
+                            }}
+                          >
+                            <SelectTrigger className="h-8">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {INTAKE_BRANCH_ACTIONS.map((action) => (
+                                <SelectItem key={action} value={action}>
+                                  {INTAKE_BRANCH_ACTION_LABELS[action]}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        {(question.fallbackAction ?? "next_question") === "goto_question" ? (
+                          <div className="space-y-1">
+                            <Label className="text-xs">Go to question</Label>
+                            <Select
+                              value={question.fallbackGotoQuestionId ?? "none"}
+                              disabled={!canManage || !draft.intakeFlowEnabled}
+                              onValueChange={(v) =>
+                                setDraft({
+                                  ...draft,
+                                  intakeQuestions: draft.intakeQuestions.map((q) =>
+                                    q.id === question.id
+                                      ? {
+                                          ...q,
+                                          fallbackGotoQuestionId: v === "none" ? null : v,
+                                        }
+                                      : q
+                                  ),
+                                })
+                              }
+                            >
+                              <SelectTrigger className="h-8">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="none">Select…</SelectItem>
+                                {draft.intakeQuestions
+                                  .filter((q) => q.id !== question.id)
+                                  .map((q) => (
+                                    <SelectItem key={q.id} value={q.id}>
+                                      {q.prompt.slice(0, 40) || q.key}
+                                    </SelectItem>
+                                  ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <p className="text-[11px] text-muted-foreground">
+            Example: ask if they are a laundry business → Yes gets a laundry-specific reply; No asks
+            what industry they are in. Keywords are matched as substrings (case-insensitive).
+          </p>
+        </div>
       </CardContent>
     </Card>
 

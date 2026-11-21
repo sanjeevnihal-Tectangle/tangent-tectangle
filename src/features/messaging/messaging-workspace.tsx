@@ -1166,7 +1166,7 @@ export function MessagingWorkspace({
           <MessagingSettingsPanel
             settings={settings}
             setSettings={setSettings}
-            whatsappAccounts={whatsappAccounts}
+            inboxAccounts={[...whatsappAccounts, ...instagramAccounts]}
           />
         </TabsContent>
       </Tabs>
