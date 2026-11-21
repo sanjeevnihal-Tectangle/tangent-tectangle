@@ -3,12 +3,7 @@ import { after, NextResponse, type NextRequest } from "next/server"
 
 import { publicEnv } from "@/lib/env/public"
 import { serverEnv } from "@/lib/env/server"
-import {
-  applyInboundUnderstanding,
-  isFaqAutoReplyAllowed,
-  loadOrgMessagingSettings,
-  understandInboundMessage,
-} from "@/lib/messaging/inbox"
+import { processInboundAiAndMaybeReply } from "@/lib/messaging/inbox"
 import {
   processInstagramWebhook,
   type InstagramWebhookBody,
@@ -59,7 +54,6 @@ export async function POST(request: NextRequest) {
     if (result.processed > 0) {
       after(async () => {
         try {
-          // Light AI draft on newest inbound Instagram messages (draft_only / auto_faq settings).
           const { data: recent } = await admin
             .from("conversation_messages")
             .select("id, thread_id, organization_id, body, direction, ai_draft_reply")
@@ -75,48 +69,25 @@ export async function POST(request: NextRequest) {
               organization_id: string
               body: string
             }
-            const settings = await loadOrgMessagingSettings(admin, message.organization_id)
-            if (!settings.inboxAiEnabled) continue
-
-            const { data: org } = await admin
-              .from("organizations")
-              .select("name")
-              .eq("id", message.organization_id)
-              .maybeSingle()
             const { data: thread } = await admin
               .from("conversation_threads")
-              .select("participant_name, channel")
+              .select("participant_name, connected_account_id")
               .eq("id", message.thread_id)
               .maybeSingle()
-            const { data: history } = await admin
-              .from("conversation_messages")
-              .select("direction, body")
-              .eq("thread_id", message.thread_id)
-              .order("occurred_at", { ascending: true })
-              .limit(20)
 
-            const understanding = await understandInboundMessage({
-              businessName: (org as { name?: string } | null)?.name || "Business",
-              businessSummary: "",
-              channel: "instagram",
-              participantName:
-                (thread as { participant_name?: string } | null)?.participant_name || "Customer",
-              recentMessages: (history ?? []) as { direction: string; body: string }[],
-              latestInbound: message.body,
-            })
-            if (!understanding) continue
-
-            await applyInboundUnderstanding({
+            await processInboundAiAndMaybeReply({
               admin,
               organizationId: message.organization_id,
               threadId: message.thread_id,
               messageId: message.id,
-              understanding,
+              connectedAccountId:
+                (thread as { connected_account_id?: string | null } | null)?.connected_account_id ??
+                null,
+              channel: "instagram",
+              body: message.body,
+              participantName:
+                (thread as { participant_name?: string } | null)?.participant_name || "Customer",
             })
-
-            // Auto-send only for WhatsApp session path today; Instagram stays draft_only for safety.
-            void isFaqAutoReplyAllowed
-            void settings.autoReplyMode
           }
         } catch (error) {
           console.warn("[tangent] Instagram webhook AI draft failed", error)

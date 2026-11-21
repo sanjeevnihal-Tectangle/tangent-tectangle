@@ -65,7 +65,7 @@ async function upsertThreadAndMessage(input: {
 }): Promise<void> {
   const { data: existing } = await input.admin
     .from("conversation_threads")
-    .select("id, unread_count")
+    .select("id, unread_count, metadata")
     .eq("organization_id", input.organizationId)
     .eq("channel", "instagram")
     .eq("external_thread_key", input.externalThreadKey)
@@ -75,6 +75,11 @@ async function upsertThreadAndMessage(input: {
   if (existing) {
     threadId = (existing as { id: string }).id
     const unread = Number((existing as { unread_count?: number }).unread_count ?? 0)
+    const priorMeta =
+      typeof (existing as { metadata?: unknown }).metadata === "object" &&
+      (existing as { metadata?: Record<string, unknown> }).metadata
+        ? ((existing as { metadata: Record<string, unknown> }).metadata ?? {})
+        : {}
     await input.admin
       .from("conversation_threads")
       .update({
@@ -87,7 +92,13 @@ async function upsertThreadAndMessage(input: {
         last_message_preview: input.preview,
         last_inbound_at: input.inbound ? input.occurredAt : undefined,
         ai_summary: input.aiSummary ?? undefined,
-        metadata: input.metadata,
+        metadata: {
+          ...priorMeta,
+          ...input.metadata,
+          ...(priorMeta.intake && !("intake" in input.metadata)
+            ? { intake: priorMeta.intake }
+            : {}),
+        },
       })
       .eq("id", threadId)
   } else {

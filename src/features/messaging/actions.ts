@@ -55,9 +55,14 @@ import {
   sendTemplateToSingleContact,
 } from "@/lib/messaging/broadcast-send"
 import {
+  processInboundAiAndMaybeReply,
+  readIntakeState,
+  resolveIntakeReply,
   sendInboxSessionReply,
   understandInboundMessage,
 } from "@/lib/messaging/inbox"
+import { createClient } from "@supabase/supabase-js"
+import { serverEnv } from "@/lib/env/server"
 import { syncInstagramInbox, resolvePageForInstagram } from "@/lib/messaging/instagram-sync"
 import { subscribeInstagramLiveWebhooks } from "@/lib/messaging/instagram-webhook"
 import { publicEnv } from "@/lib/env/public"
@@ -1361,16 +1366,36 @@ export async function saveMessagingSettingsAction(
   if (!parsed.success) {
     return { ok: false, error: "Check quiet hours and keywords.", fieldErrors: fieldErrorsFromZod(parsed.error) }
   }
-  const saved = await gate.repository.saveMessagingSettings(parsed.data)
-  await gate.repository.recordAudit({
-    action: "messaging.settings_saved",
-    entityType: "messaging_settings",
-    entityId: gate.context.workspace.id,
-    summary: `Updated messaging settings (quiet hours ${saved.quietHoursEnabled ? "on" : "off"})`,
-    actor: { type: "user", id: gate.context.user.id },
-  })
-  revalidateMessaging(gate.context.workspace.slug)
-  return { ok: true, data: saved }
+  try {
+    const saved = await gate.repository.saveMessagingSettings(parsed.data)
+    // Confirm intake flags actually persisted (migration may be missing).
+    const reloaded = await gate.repository.getMessagingSettings()
+    if (
+      parsed.data.intakeAutoSend &&
+      !reloaded.intakeAutoSend &&
+      parsed.data.intakeFlowEnabled
+    ) {
+      return {
+        ok: false,
+        error:
+          "Settings saved without intake columns. Run supabase/migrations/20261121000100_messaging_intake_flow.sql in Supabase, then save again.",
+      }
+    }
+    await gate.repository.recordAudit({
+      action: "messaging.settings_saved",
+      entityType: "messaging_settings",
+      entityId: gate.context.workspace.id,
+      summary: `Updated messaging settings (intake ${saved.intakeFlowEnabled ? "on" : "off"}, auto-send ${saved.intakeAutoSend ? "on" : "off"})`,
+      actor: { type: "user", id: gate.context.user.id },
+    })
+    revalidateMessaging(gate.context.workspace.slug)
+    return { ok: true, data: saved }
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "Could not save messaging settings.",
+    }
+  }
 }
 
 export async function saveAutomationAction(
@@ -1620,7 +1645,16 @@ export async function syncInstagramInboxAction(
   workspace: string,
   connectedAccountId?: string
 ): Promise<
-  MessagingResult<{ conversations: number; messages: number; comments: number; threads: ConversationThread[] }>
+  MessagingResult<{
+    conversations: number
+    messages: number
+    comments: number
+    threads: ConversationThread[]
+    autoSent: number
+    autoDrafted: number
+    autoErrors: string[]
+    intakeAutoSend: boolean
+  }>
 > {
   const gate = await requireMessagingManage(workspace)
   if (!gate.ok) return gate
@@ -1663,16 +1697,170 @@ export async function syncInstagramInboxAction(
       ourIgUsername: account.displayName.replace(/^@/, ""),
     })
 
+    // Localhost cannot receive Meta webhooks — run intake/AI for new DMs + catch-up.
+    const settings = await gate.repository.getMessagingSettings()
+    const autoErrors: string[] = []
+    let autoSent = 0
+    let autoDrafted = 0
+
+    const jobs: {
+      id: string
+      threadId: string
+      body: string
+      participantName: string
+    }[] = [...result.newInbound]
+
+    // Catch-up: latest inbound that still has no outbound after it (waiting for auto-reply).
+    const threads = await gate.repository.listConversationThreads({ limit: 20 })
+    for (const thread of threads) {
+      if (thread.channel !== "instagram") continue
+      if (thread.externalThreadKey.startsWith("ig_comments:")) continue
+      if (jobs.some((j) => j.threadId === thread.id)) continue
+      const messages = await gate.repository.listConversationMessages(thread.id)
+      let pending: (typeof messages)[number] | null = null
+      for (let i = messages.length - 1; i >= 0; i--) {
+        const m = messages[i]
+        if (!m) continue
+        if (m.direction === "outbound") break
+        if (m.direction === "inbound") {
+          pending = m
+          break
+        }
+      }
+      if (!pending) continue
+      jobs.push({
+        id: pending.id,
+        threadId: thread.id,
+        body: pending.body,
+        participantName: thread.participantName || thread.participantHandle || "Customer",
+      })
+      if (jobs.length >= 8) break
+    }
+
+    const env = serverEnv()
+    const admin =
+      publicEnv.NEXT_PUBLIC_SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY
+        ? createClient(publicEnv.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
+            auth: { persistSession: false, autoRefreshToken: false },
+          })
+        : null
+
+    if (!admin) {
+      autoErrors.push(
+        "SUPABASE_SERVICE_ROLE_KEY is missing — intake can draft but may not auto-send on sync. Add it to .env."
+      )
+    }
+
+    for (const inbound of jobs.slice(0, 8)) {
+      try {
+        if (admin) {
+          const before = await gate.repository.listConversationMessages(inbound.threadId)
+          const outboundBefore = before.filter((m) => m.direction === "outbound").length
+          await processInboundAiAndMaybeReply({
+            admin,
+            organizationId: gate.context.workspace.id,
+            threadId: inbound.threadId,
+            messageId: inbound.id,
+            connectedAccountId: account.id,
+            channel: "instagram",
+            body: inbound.body,
+            participantName: inbound.participantName,
+          })
+          const after = await gate.repository.listConversationMessages(inbound.threadId)
+          const outboundAfter = after.filter((m) => m.direction === "outbound").length
+          if (outboundAfter > outboundBefore) autoSent += 1
+          else {
+            const latestInbound = [...after].reverse().find((m) => m.id === inbound.id)
+            if (latestInbound?.aiDraftReply) autoDrafted += 1
+          }
+        } else {
+          // No service role: still compute intake draft onto the inbound message via repository.
+          const messages = await gate.repository.listConversationMessages(inbound.threadId)
+          const metadata = await gate.repository.getConversationThreadMetadata(inbound.threadId)
+          const intake = resolveIntakeReply({
+            settings,
+            state: readIntakeState(metadata),
+            latestInbound: inbound.body,
+            recentMessages: messages.map((m) => ({ direction: m.direction, body: m.body })),
+          })
+          if (intake?.draftReply) {
+            await gate.repository.mergeConversationThreadMetadata(inbound.threadId, {
+              intake: intake.nextState,
+            })
+            await gate.repository.updateConversationMessageAi(inbound.id, {
+              aiIntent: intake.intent,
+              aiSentiment: "neutral",
+              aiConfidence: intake.confidence,
+              aiDraftReply: intake.draftReply,
+              aiShouldAutoReply: intake.shouldAutoReply,
+            })
+            autoDrafted += 1
+            if (settings.intakeAutoSend && intake.shouldAutoReply) {
+              const thread = await gate.repository.getConversationThread(inbound.threadId)
+              if (!thread) continue
+              let toHandle = thread.participantHandle
+              if (!/^\d+$/.test(toHandle.replace(/^@/, ""))) {
+                const igId = metadata.participantIgId
+                if (typeof igId === "string" && /^\d+$/.test(igId)) toHandle = igId
+              }
+              try {
+                const sent = await sendInboxSessionReply({
+                  organizationId: gate.context.workspace.id,
+                  channel: "instagram",
+                  connectedAccountId: account.id,
+                  accountExternalId: account.externalAccountId,
+                  accountProvider: "instagram",
+                  toHandle,
+                  body: intake.draftReply,
+                })
+                await gate.repository.saveConversationOutbound({
+                  threadId: inbound.threadId,
+                  body: intake.draftReply,
+                  providerMessageId: sent.messageId,
+                  senderKind: "auto",
+                })
+                autoSent += 1
+                autoDrafted -= 1
+              } catch (error) {
+                autoErrors.push(
+                  error instanceof Error ? error.message : "Instagram auto-send failed"
+                )
+              }
+            }
+          }
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Intake/AI failed"
+        console.warn("[tangent] Instagram sync intake/AI failed", message)
+        autoErrors.push(message)
+      }
+    }
+
+    if (settings.intakeFlowEnabled && settings.intakeAutoSend && autoSent === 0 && autoDrafted === 0) {
+      autoErrors.push(
+        "No auto replies were produced. Confirm intake is saved, Sync again after a customer message, and that the branch Then action is “Send reply and end intake”."
+      )
+    }
+
     await gate.repository.recordAudit({
       action: "messaging.instagram_inbox_synced",
       entityType: "connected_account",
       entityId: account.id,
-      summary: `Synced Instagram inbox: ${result.conversations} chats, ${result.messages} messages, ${result.comments} comments`,
+      summary: `Synced Instagram inbox: ${result.conversations} chats, ${result.messages} messages, ${result.comments} comments; auto-sent ${autoSent}`,
       actor: { type: "user", id: gate.context.user.id },
     })
 
     revalidateMessaging(gate.context.workspace.slug)
-    return { ok: true, data: result }
+    return {
+      ok: true,
+      data: {
+        ...result,
+        autoSent,
+        autoDrafted,
+        autoErrors: autoErrors.slice(0, 5),
+        intakeAutoSend: settings.intakeAutoSend,
+      },
+    }
   } catch (error) {
     if (error instanceof IntegrationError) return { ok: false, error: error.message }
     return {
@@ -1691,12 +1879,34 @@ export async function openInboxThreadAction(
 ): Promise<MessagingResult<{ thread: ConversationThread; messages: ConversationMessage[] }>> {
   const gate = await requireMessagingManage(workspace)
   if (!gate.ok) return gate
-  const threads = await gate.repository.listConversationThreads({ limit: 200 })
-  const thread = threads.find((t) => t.id === threadId)
-  if (!thread) return { ok: false, error: "Conversation not found." }
-  const marked = (await gate.repository.markConversationThreadRead(threadId)) ?? thread
-  const messages = await gate.repository.listConversationMessages(threadId)
-  return { ok: true, data: { thread: marked, messages } }
+  try {
+    // Fast path: load messages + thread in parallel (do not list the whole inbox).
+    const [thread, messages] = await Promise.all([
+      gate.repository.getConversationThread(threadId),
+      gate.repository.listConversationMessages(threadId),
+    ])
+    if (!thread) {
+      return { ok: false, error: "Conversation not found. Sync Instagram and try again." }
+    }
+
+    // Mark read in the background so opening the chat is not blocked.
+    void gate.repository.markConversationThreadRead(threadId).catch((error) => {
+      console.error("[tangent] markConversationThreadRead failed", error)
+    })
+
+    return {
+      ok: true,
+      data: { thread: { ...thread, unreadCount: 0 }, messages },
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : "Could not open this conversation. Confirm inbox SQL migration is applied.",
+    }
+  }
 }
 
 export async function draftInboxReplyAction(
@@ -1715,18 +1925,64 @@ export async function draftInboxReplyAction(
   const quota = aiQuotaError(gate.context)
   if (quota) return { ok: false, error: quota }
 
-  const threads = await gate.repository.listConversationThreads({ limit: 200 })
-  const thread = threads.find((t) => t.id === threadId)
+  const [thread, messages] = await Promise.all([
+    gate.repository.getConversationThread(threadId),
+    gate.repository.listConversationMessages(threadId),
+  ])
   if (!thread) return { ok: false, error: "Conversation not found." }
-  const messages = await gate.repository.listConversationMessages(threadId)
   const latestInbound = [...messages].reverse().find((m) => m.direction === "inbound")
   if (!latestInbound) return { ok: false, error: "No inbound message to reply to." }
 
   try {
-    const [business, orgName] = await Promise.all([
+    const [business, orgName, settings, metadata] = await Promise.all([
       gate.repository.getBusinessProfile(),
       Promise.resolve(gate.context.workspace.name),
+      gate.repository.getMessagingSettings(),
+      gate.repository.getConversationThreadMetadata(threadId),
     ])
+
+    const intakeState = readIntakeState(metadata)
+    const recentMessages = messages.map((m) => ({ direction: m.direction, body: m.body }))
+    const intake = resolveIntakeReply({
+      settings,
+      state: intakeState,
+      latestInbound: latestInbound.body,
+      recentMessages,
+    })
+
+    if (!intake && settings.intakeFlowEnabled && !intakeState.completed) {
+      return {
+        ok: false,
+        error: "Intake is waiting for the customer’s next answer — nothing to draft yet.",
+      }
+    }
+
+    if (intake && !intake.handoffToAi) {
+      await gate.repository.mergeConversationThreadMetadata(threadId, { intake: intake.nextState })
+      await gate.repository.updateConversationMessageAi(latestInbound.id, {
+        aiIntent: intake.intent,
+        aiSentiment: "neutral",
+        aiConfidence: intake.confidence,
+        aiDraftReply: intake.draftReply,
+        aiShouldAutoReply: intake.shouldAutoReply,
+      })
+      return {
+        ok: true,
+        data: {
+          draftReply: intake.draftReply,
+          intent: intake.intent,
+          confidence: intake.confidence,
+        },
+      }
+    }
+
+    if (intake?.handoffToAi) {
+      await gate.repository.mergeConversationThreadMetadata(threadId, { intake: intake.nextState })
+    }
+
+    const intakeAnswers =
+      intake?.nextState.answers ?? readIntakeState(metadata).answers
+
     const understanding = await understandInboundMessage({
       businessName: orgName || business?.name || "Business",
       businessSummary: [
@@ -1739,6 +1995,7 @@ export async function draftInboxReplyAction(
       participantName: thread.participantName,
       recentMessages: messages.map((m) => ({ direction: m.direction, body: m.body })),
       latestInbound: latestInbound.body,
+      intakeAnswers,
     })
     if (!understanding) return { ok: false, error: "AI did not return a draft." }
 
@@ -1782,17 +2039,33 @@ export async function sendInboxReplyAction(
   const body = input.body.trim()
   if (!body) return { ok: false, error: "Write a reply first." }
 
-  const threads = await gate.repository.listConversationThreads({ limit: 200 })
-  const thread = threads.find((t) => t.id === input.threadId)
+  const thread = await gate.repository.getConversationThread(input.threadId)
   if (!thread) return { ok: false, error: "Conversation not found." }
 
+  if (thread.externalThreadKey.startsWith("ig_comments:")) {
+    return {
+      ok: false,
+      error: "Comment threads are read-only in Inbox. Reply from a DM conversation instead.",
+    }
+  }
+
   const accounts = await gate.repository.listConnectedAccounts()
+  const preferredProvider = thread.channel === "instagram" ? "instagram" : "whatsapp"
   const accountId =
     input.connectedAccountId ||
     thread.connectedAccountId ||
+    accounts.find((a) => a.provider === preferredProvider)?.id ||
     accounts.find((a) => a.provider === "whatsapp")?.id
   const account = accounts.find((a) => a.id === accountId)
-  if (!account) return { ok: false, error: "Connect a WhatsApp account for session replies." }
+  if (!account) {
+    return {
+      ok: false,
+      error:
+        preferredProvider === "instagram"
+          ? "Connect an Instagram account under Integrations to reply to DMs."
+          : "Connect a WhatsApp account under Integrations for session replies.",
+    }
+  }
 
   const payloadParsed = sessionReplyApprovalPayloadSchema.safeParse({
     threadId: thread.id,
@@ -1841,7 +2114,7 @@ export async function sendInboxReplyAction(
       return {
         ok: false,
         error:
-          "Reply sent on WhatsApp but inbox tables are missing. Run 20261120000100_messaging_inbox.sql.",
+          "Reply sent but inbox tables are missing. Run 20261120000100_messaging_inbox.sql.",
       }
     }
 

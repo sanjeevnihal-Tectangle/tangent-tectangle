@@ -213,8 +213,15 @@ export interface WorkspaceRepository {
   deleteAutomation(id: string): Promise<void>
 
   listConversationThreads(options?: { limit?: number }): Promise<ConversationThread[]>
+  getConversationThread(threadId: string): Promise<ConversationThread | null>
   listConversationMessages(threadId: string): Promise<ConversationMessage[]>
   markConversationThreadRead(threadId: string): Promise<ConversationThread | null>
+  /** Raw thread metadata (intake progress, provider ids, etc.). */
+  getConversationThreadMetadata(threadId: string): Promise<Record<string, unknown>>
+  mergeConversationThreadMetadata(
+    threadId: string,
+    metadata: Record<string, unknown>
+  ): Promise<void>
   saveConversationOutbound(input: {
     threadId: string
     body: string
@@ -246,7 +253,7 @@ export interface WorkspaceRepository {
     status: string
     occurredAt: string
     metadata?: Record<string, unknown>
-  }): Promise<ConversationMessage | null>
+  }): Promise<{ message: ConversationMessage; created: boolean } | null>
   updateConversationMessageAi(
     messageId: string,
     patch: Partial<

@@ -4,12 +4,8 @@ import { after, NextResponse, type NextRequest } from "next/server"
 import { publicEnv } from "@/lib/env/public"
 import { serverEnv } from "@/lib/env/server"
 import {
-  applyInboundUnderstanding,
-  isFaqAutoReplyAllowed,
   loadOrgMessagingSettings,
-  persistOutboundInboxMessage,
-  sendInboxSessionReply,
-  understandInboundMessage,
+  processInboundAiAndMaybeReply,
   upsertWhatsappInboundMessage,
 } from "@/lib/messaging/inbox"
 
@@ -191,96 +187,15 @@ export async function POST(request: NextRequest) {
     after(async () => {
       for (const job of aiJobs) {
         try {
-          const settings = await loadOrgMessagingSettings(admin, job.organizationId)
-          if (!settings.inboxAiEnabled) continue
-
-          const { data: org } = await admin
-            .from("organizations")
-            .select("name")
-            .eq("id", job.organizationId)
-            .maybeSingle()
-          const { data: business } = await admin
-            .from("business_profiles")
-            .select("description, products_and_services")
-            .eq("organization_id", job.organizationId)
-            .maybeSingle()
-
-          const { data: recentRows } = await admin
-            .from("conversation_messages")
-            .select("direction, body")
-            .eq("thread_id", job.threadId)
-            .order("occurred_at", { ascending: true })
-            .limit(20)
-
-          const understanding = await understandInboundMessage({
-            businessName: (org as { name?: string } | null)?.name || "Business",
-            businessSummary: [
-              (business as { description?: string } | null)?.description,
-              Array.isArray((business as { products_and_services?: unknown })?.products_and_services)
-                ? ((business as { products_and_services: string[] }).products_and_services || []).join(
-                    ", "
-                  )
-                : "",
-            ]
-              .filter(Boolean)
-              .join(" — "),
-            channel: "whatsapp",
-            participantName: job.participantName,
-            recentMessages: (recentRows ?? []) as { direction: string; body: string }[],
-            latestInbound: job.body,
-          })
-          if (!understanding) continue
-
-          await applyInboundUnderstanding({
+          await processInboundAiAndMaybeReply({
             admin,
             organizationId: job.organizationId,
             threadId: job.threadId,
             messageId: job.messageId,
-            understanding,
-          })
-
-          if (
-            !job.connectedAccountId ||
-            !isFaqAutoReplyAllowed(understanding, settings.autoReplyMode)
-          ) {
-            continue
-          }
-
-          const { data: account } = await admin
-            .from("connected_accounts")
-            .select("id, provider, external_account_id")
-            .eq("id", job.connectedAccountId)
-            .eq("organization_id", job.organizationId)
-            .maybeSingle()
-          if (!account) continue
-
-          const { data: thread } = await admin
-            .from("conversation_threads")
-            .select("participant_handle")
-            .eq("id", job.threadId)
-            .maybeSingle()
-          const toHandle = (thread as { participant_handle?: string } | null)?.participant_handle
-          if (!toHandle) continue
-
-          const sent = await sendInboxSessionReply({
-            organizationId: job.organizationId,
+            connectedAccountId: job.connectedAccountId,
             channel: "whatsapp",
-            connectedAccountId: account.id as string,
-            accountExternalId: String(
-              (account as { external_account_id?: string }).external_account_id ?? ""
-            ),
-            accountProvider: String((account as { provider?: string }).provider ?? ""),
-            toHandle,
-            body: understanding.draftReply,
-          })
-
-          await persistOutboundInboxMessage({
-            admin,
-            organizationId: job.organizationId,
-            threadId: job.threadId,
-            body: understanding.draftReply,
-            providerMessageId: sent.messageId,
-            senderKind: "auto",
+            body: job.body,
+            participantName: job.participantName,
           })
         } catch (error) {
           console.warn("[tangent] inbox AI processing failed", error)

@@ -1542,16 +1542,47 @@ export function createSupabaseRepository(
       const result = await supabase
         .from("messaging_settings")
         .select(
-          "quiet_hours_enabled, quiet_hours_start, quiet_hours_end, timezone, opt_out_keywords, default_language, inbox_ai_enabled, auto_reply_mode, auto_reply_connected_account_id, updated_at"
+          "quiet_hours_enabled, quiet_hours_start, quiet_hours_end, timezone, opt_out_keywords, default_language, inbox_ai_enabled, auto_reply_mode, auto_reply_connected_account_id, intake_flow_enabled, intake_auto_send, intake_welcome_message, intake_questions, updated_at"
         )
         .eq("organization_id", organizationId)
         .maybeSingle()
       if (result.error) {
         if (isMissingRelation(result.error)) return defaultMessagingSettings()
+        // Older DBs without intake columns — retry core fields.
+        if (/intake_/i.test(result.error.message || "")) {
+          const fallback = await supabase
+            .from("messaging_settings")
+            .select(
+              "quiet_hours_enabled, quiet_hours_start, quiet_hours_end, timezone, opt_out_keywords, default_language, inbox_ai_enabled, auto_reply_mode, auto_reply_connected_account_id, updated_at"
+            )
+            .eq("organization_id", organizationId)
+            .maybeSingle()
+          if (fallback.error) {
+            if (isMissingRelation(fallback.error)) return defaultMessagingSettings()
+            throw new RepositoryError("Load messaging settings", fallback.error)
+          }
+          if (!fallback.data) return defaultMessagingSettings()
+          const row = fallback.data as Record<string, unknown>
+          const parsed = messagingSettingsSchema.safeParse({
+            ...defaultMessagingSettings(),
+            quietHoursEnabled: row.quiet_hours_enabled,
+            quietHoursStart: row.quiet_hours_start,
+            quietHoursEnd: row.quiet_hours_end,
+            timezone: row.timezone,
+            optOutKeywords: row.opt_out_keywords ?? [],
+            defaultLanguage: row.default_language,
+            inboxAiEnabled: row.inbox_ai_enabled !== false,
+            autoReplyMode: row.auto_reply_mode ?? "draft_only",
+            autoReplyConnectedAccountId: row.auto_reply_connected_account_id ?? null,
+            updatedAt: row.updated_at,
+          })
+          return parsed.success ? parsed.data : defaultMessagingSettings()
+        }
         throw new RepositoryError("Load messaging settings", result.error)
       }
       if (!result.data) return defaultMessagingSettings()
       const row = result.data as Record<string, unknown>
+      const defaults = defaultMessagingSettings()
       const parsed = messagingSettingsSchema.safeParse({
         quietHoursEnabled: row.quiet_hours_enabled,
         quietHoursStart: row.quiet_hours_start,
@@ -1562,27 +1593,45 @@ export function createSupabaseRepository(
         inboxAiEnabled: row.inbox_ai_enabled !== false,
         autoReplyMode: row.auto_reply_mode ?? "draft_only",
         autoReplyConnectedAccountId: row.auto_reply_connected_account_id ?? null,
+        intakeFlowEnabled: row.intake_flow_enabled ?? defaults.intakeFlowEnabled,
+        intakeAutoSend: row.intake_auto_send ?? defaults.intakeAutoSend,
+        intakeWelcomeMessage:
+          typeof row.intake_welcome_message === "string" && row.intake_welcome_message.trim()
+            ? row.intake_welcome_message
+            : defaults.intakeWelcomeMessage,
+        intakeQuestions: Array.isArray(row.intake_questions)
+          ? row.intake_questions
+          : defaults.intakeQuestions,
         updatedAt: row.updated_at,
       })
       return parsed.success ? parsed.data : defaultMessagingSettings()
     },
 
     async saveMessagingSettings(settings) {
-      check(
-        "Save messaging settings",
-        await supabase.from("messaging_settings").upsert({
-          organization_id: organizationId,
-          quiet_hours_enabled: settings.quietHoursEnabled,
-          quiet_hours_start: settings.quietHoursStart,
-          quiet_hours_end: settings.quietHoursEnd,
-          timezone: settings.timezone,
-          opt_out_keywords: settings.optOutKeywords,
-          default_language: settings.defaultLanguage,
-          inbox_ai_enabled: settings.inboxAiEnabled,
-          auto_reply_mode: settings.autoReplyMode,
-          auto_reply_connected_account_id: settings.autoReplyConnectedAccountId,
+      const payload: Record<string, unknown> = {
+        organization_id: organizationId,
+        quiet_hours_enabled: settings.quietHoursEnabled,
+        quiet_hours_start: settings.quietHoursStart,
+        quiet_hours_end: settings.quietHoursEnd,
+        timezone: settings.timezone,
+        opt_out_keywords: settings.optOutKeywords,
+        default_language: settings.defaultLanguage,
+        inbox_ai_enabled: settings.inboxAiEnabled,
+        auto_reply_mode: settings.autoReplyMode,
+        auto_reply_connected_account_id: settings.autoReplyConnectedAccountId,
+        intake_flow_enabled: settings.intakeFlowEnabled,
+        intake_auto_send: settings.intakeAutoSend,
+        intake_welcome_message: settings.intakeWelcomeMessage,
+        intake_questions: settings.intakeQuestions,
+      }
+      const result = await supabase.from("messaging_settings").upsert(payload)
+      if (result.error && /intake_/i.test(result.error.message || "")) {
+        throw new RepositoryError("Save messaging settings", {
+          message:
+            "Intake settings columns are missing. Run supabase/migrations/20261121000100_messaging_intake_flow.sql in the Supabase SQL Editor, then save again.",
         })
-      )
+      }
+      check("Save messaging settings", result)
       return { ...settings, updatedAt: new Date().toISOString() }
     },
 
@@ -1618,6 +1667,40 @@ export function createSupabaseRepository(
         })
         return parsed.success ? [parsed.data] : []
       })
+    },
+
+    async getConversationThread(threadId) {
+      const result = await supabase
+        .from("conversation_threads")
+        .select(
+          "id, channel, connected_account_id, contact_id, external_thread_key, participant_handle, participant_name, status, unread_count, last_message_at, last_message_preview, last_inbound_at, ai_summary, updated_at"
+        )
+        .eq("organization_id", organizationId)
+        .eq("id", threadId)
+        .maybeSingle()
+      if (result.error) {
+        if (isMissingRelation(result.error)) return null
+        throw new RepositoryError("Load conversation thread", result.error)
+      }
+      if (!result.data) return null
+      const row = result.data as Record<string, unknown>
+      const parsed = conversationThreadSchema.safeParse({
+        id: row.id,
+        channel: row.channel,
+        connectedAccountId: row.connected_account_id,
+        contactId: row.contact_id,
+        externalThreadKey: row.external_thread_key,
+        participantHandle: row.participant_handle ?? "",
+        participantName: row.participant_name ?? "",
+        status: row.status,
+        unreadCount: row.unread_count ?? 0,
+        lastMessageAt: row.last_message_at,
+        lastMessagePreview: row.last_message_preview ?? "",
+        lastInboundAt: row.last_inbound_at,
+        aiSummary: row.ai_summary,
+        updatedAt: row.updated_at,
+      })
+      return parsed.success ? parsed.data : null
     },
 
     async listConversationMessages(threadId) {
@@ -1690,10 +1773,50 @@ export function createSupabaseRepository(
       return parsed.success ? parsed.data : null
     },
 
+    async getConversationThreadMetadata(threadId) {
+      const result = await supabase
+        .from("conversation_threads")
+        .select("metadata")
+        .eq("organization_id", organizationId)
+        .eq("id", threadId)
+        .maybeSingle()
+      if (result.error) {
+        if (isMissingRelation(result.error)) return {}
+        throw new RepositoryError("Load thread metadata", result.error)
+      }
+      const metadata = (result.data as { metadata?: Record<string, unknown> } | null)?.metadata
+      return metadata && typeof metadata === "object" ? metadata : {}
+    },
+
+    async mergeConversationThreadMetadata(threadId, metadata) {
+      const existingResult = await supabase
+        .from("conversation_threads")
+        .select("metadata")
+        .eq("organization_id", organizationId)
+        .eq("id", threadId)
+        .maybeSingle()
+      if (existingResult.error && !isMissingRelation(existingResult.error)) {
+        throw new RepositoryError("Load thread metadata", existingResult.error)
+      }
+      const existing =
+        ((existingResult.data as { metadata?: Record<string, unknown> } | null)?.metadata &&
+        typeof (existingResult.data as { metadata?: Record<string, unknown> }).metadata === "object"
+          ? (existingResult.data as { metadata: Record<string, unknown> }).metadata
+          : {}) || {}
+      check(
+        "Update thread metadata",
+        await supabase
+          .from("conversation_threads")
+          .update({ metadata: { ...existing, ...metadata } })
+          .eq("organization_id", organizationId)
+          .eq("id", threadId)
+      )
+    },
+
     async upsertConversationThread(input) {
       const existing = await supabase
         .from("conversation_threads")
-        .select("id, unread_count")
+        .select("id, unread_count, metadata")
         .eq("organization_id", organizationId)
         .eq("channel", input.channel)
         .eq("external_thread_key", input.externalThreadKey)
@@ -1712,6 +1835,21 @@ export function createSupabaseRepository(
       const unreadDelta = input.unreadCountDelta ?? 0
       let row: Record<string, unknown>
       if (existing.data) {
+        // Preserve intake (and any other) metadata keys — Instagram sync must not wipe them.
+        const priorMeta =
+          existing.data &&
+          typeof (existing.data as { metadata?: unknown }).metadata === "object" &&
+          (existing.data as { metadata?: Record<string, unknown> }).metadata
+            ? ((existing.data as { metadata: Record<string, unknown> }).metadata ?? {})
+            : {}
+        const nextMeta = {
+          ...priorMeta,
+          ...(input.metadata ?? {}),
+          // Explicitly keep intake from prior if sync payload omitted it.
+          ...(priorMeta.intake && !(input.metadata && "intake" in input.metadata)
+            ? { intake: priorMeta.intake }
+            : {}),
+        }
         const updated = await supabase
           .from("conversation_threads")
           .update({
@@ -1724,7 +1862,7 @@ export function createSupabaseRepository(
             last_message_preview: input.lastMessagePreview,
             last_inbound_at: input.lastInboundAt,
             ai_summary: input.aiSummary ?? undefined,
-            metadata: input.metadata ?? {},
+            metadata: nextMeta,
             updated_at: now,
           })
           .eq("id", (existing.data as { id: string }).id)
@@ -1814,7 +1952,7 @@ export function createSupabaseRepository(
             aiShouldAutoReply: Boolean(row.ai_should_auto_reply),
             occurredAt: row.occurred_at,
           })
-          return parsed.success ? parsed.data : null
+          return parsed.success ? { message: parsed.data, created: false } : null
         }
       }
 
@@ -1857,7 +1995,7 @@ export function createSupabaseRepository(
         aiShouldAutoReply: Boolean(row.ai_should_auto_reply),
         occurredAt: row.occurred_at,
       })
-      return parsed.success ? parsed.data : null
+      return parsed.success ? { message: parsed.data, created: true } : null
     },
 
     async saveConversationOutbound(input) {

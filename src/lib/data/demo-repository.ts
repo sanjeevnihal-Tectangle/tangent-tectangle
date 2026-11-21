@@ -70,6 +70,7 @@ interface DemoStoreData {
   automations?: MessageAutomation[]
   conversationThreads?: ConversationThread[]
   conversationMessages?: ConversationMessage[]
+  conversationThreadMetadata?: Record<string, Record<string, unknown>>
   audit: AuditRecord[]
   runs?: AgentRunLog[]
   creativeProjects?: CreativeProject[]
@@ -555,7 +556,9 @@ export function createDemoRepository(): WorkspaceRepository {
     },
 
     async getMessagingSettings() {
-      return (await load()).messagingSettings ?? defaultMessagingSettings()
+      const stored = (await load()).messagingSettings
+      if (!stored) return defaultMessagingSettings()
+      return { ...defaultMessagingSettings(), ...stored }
     },
     async saveMessagingSettings(settings) {
       return mutate((data) => {
@@ -587,6 +590,10 @@ export function createDemoRepository(): WorkspaceRepository {
         .sort((a, b) => (b.lastMessageAt ?? "").localeCompare(a.lastMessageAt ?? ""))
         .slice(0, options?.limit ?? 80)
     },
+    async getConversationThread(threadId) {
+      const { conversationThreads = [] } = await load()
+      return conversationThreads.find((t) => t.id === threadId) ?? null
+    },
     async listConversationMessages(threadId) {
       const { conversationMessages = [] } = await load()
       return conversationMessages
@@ -602,6 +609,19 @@ export function createDemoRepository(): WorkspaceRepository {
           t.id === threadId ? saved : t
         )
         return saved
+      })
+    },
+    async getConversationThreadMetadata(threadId) {
+      const { conversationThreadMetadata = {} } = await load()
+      return { ...(conversationThreadMetadata[threadId] ?? {}) }
+    },
+    async mergeConversationThreadMetadata(threadId, metadata) {
+      await mutate((data) => {
+        const existing = data.conversationThreadMetadata?.[threadId] ?? {}
+        data.conversationThreadMetadata = {
+          ...(data.conversationThreadMetadata ?? {}),
+          [threadId]: { ...existing, ...metadata },
+        }
       })
     },
     async upsertConversationThread(input) {
@@ -655,7 +675,7 @@ export function createDemoRepository(): WorkspaceRepository {
           const existing = (data.conversationMessages ?? []).find(
             (m) => m.providerMessageId === input.providerMessageId
           )
-          if (existing) return existing
+          if (existing) return { message: existing, created: false }
         }
         const message: ConversationMessage = {
           id: crypto.randomUUID(),
@@ -674,7 +694,7 @@ export function createDemoRepository(): WorkspaceRepository {
           occurredAt: input.occurredAt,
         }
         data.conversationMessages = [...(data.conversationMessages ?? []), message]
-        return message
+        return { message, created: true }
       })
     },
     async saveConversationOutbound(input) {
